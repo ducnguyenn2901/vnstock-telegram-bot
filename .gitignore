@@ -1,0 +1,28 @@
+# Môi trường ảo
+.venv/
+env/
+venv/
+ENV/
+
+# Cấu hình bảo mật & CSDL nội bộ
+.env
+*.db
+bot_database.db
+
+# Cache & file tạm của Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Thư mục biểu đồ sinh ra
+charts/
+*.png
+*.jpg
+*.jpeg
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,194 @@
+import logging
+from telegram import Update
+from telegram.ext import ContextTypes
+import database as db
+import vnstock
+import pandas as pd
+import config
+
+logger = logging.getLogger("PortfolioHandlers")
+
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Xử lý lệnh /buy
+    Cú pháp: /buy <mã> <khối lượng> <giá mua>
+    VD: /buy TCB 1000 35000 hoặc /buy TCB 1000 35.0
+    """
+    user_id = update.effective_user.id
+    args = context.args
+    
+    if len(args) < 3:
+        await update.message.reply_text(
+            "❌ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/buy TCB 1000 35000</code> hoặc <code>/buy HPG 500 26.5</code>",
+            parse_mode='HTML'
+        )
+        return
+        
+    symbol = args[0].upper().strip()
+    try:
+        quantity = int(args[1])
+        buy_price = float(args[2].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("❌ Khối lượng và giá mua phải là số hợp lệ.", parse_mode='HTML')
+        return
+        
+    if quantity <= 0 or buy_price <= 0:
+        await update.message.reply_text("❌ Khối lượng và giá phải lớn hơn 0.", parse_mode='HTML')
+        return
+
+    # Tự động quy đổi nếu nhập giá < 1000 (ví dụ 35 -> 35000)
+    if buy_price < 1000:
+        buy_price = buy_price * 1000
+        
+    db.buy_stock(user_id, symbol, quantity, buy_price)
+    
+    msg = (
+        f"✅ <b>GHI NHẬN MUA CỔ PHIẾU THÀNH CÔNG</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 Mã cổ phiếu: <b>{symbol}</b>\n"
+        f"📦 Khối lượng: <b>{config.format_number(quantity, 0)}</b> cổ phiếu\n"
+        f"💵 Giá mua: <b>{config.format_number(buy_price, 0)} đ</b>\n"
+        f"💰 Tổng giá trị: <b>{config.format_number(quantity * buy_price, 0)} đ</b>\n\n"
+        f"<i>Gõ <code>/portfolio</code> để xem báo cáo danh mục tổng thể.</i>"
+    )
+    
+    await update.message.reply_text(msg, parse_mode='HTML')
+
+async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Xử lý lệnh /sell
+    Cú pháp: /sell <mã> <khối lượng>
+    VD: /sell TCB 500
+    """
+    user_id = update.effective_user.id
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text("❌ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/sell TCB 500</code>", parse_mode='HTML')
+        return
+        
+    symbol = args[0].upper().strip()
+    try:
+        sell_qty = int(args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Khối lượng bán phải là số nguyên.", parse_mode='HTML')
+        return
+        
+    if sell_qty <= 0:
+        await update.message.reply_text("❌ Khối lượng bán phải lớn hơn 0.", parse_mode='HTML')
+        return
+        
+    remaining = db.sell_stock(user_id, symbol, sell_qty)
+    
+    if remaining == sell_qty:
+        await update.message.reply_text(f"❌ Bạn không sở hữu mã <b>{symbol}</b> trong danh mục hoặc không đủ số lượng.", parse_mode='HTML')
+    elif remaining > 0:
+        sold = sell_qty - remaining
+        await update.message.reply_text(
+            f"⚠️ Đã bán <b>{config.format_number(sold, 0)}</b> {symbol}. Còn dư <b>{config.format_number(remaining, 0)}</b> cổ phiếu do vượt quá số lượng đang có.",
+            parse_mode='HTML'
+        )
+    else:
+        await update.message.reply_text(f"✅ Đã bán thành công <b>{config.format_number(sell_qty, 0)}</b> cổ phiếu <b>{symbol}</b> khỏi danh mục.", parse_mode='HTML')
+
+async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Xử lý lệnh /portfolio
+    Hiển thị danh mục đầu tư, tính toán PnL.
+    """
+    user_id = update.effective_user.id
+    portfolio_rows = db.get_portfolio(user_id)
+    
+    if not portfolio_rows:
+        await update.message.reply_text(
+            "📭 Danh mục của bạn hiện đang trống.\n\n"
+            "Hãy dùng lệnh <code>/buy &lt;MÃ&gt; &lt;KL&gt; &lt;GIÁ&gt;</code> để thêm cổ phiếu vào sổ tay theo dõi!",
+            parse_mode='HTML'
+        )
+        return
+        
+    wait_msg = await update.message.reply_text("⏳ Đang kết nối bảng giá thị trường để tính toán PnL...", parse_mode='HTML')
+    
+    symbols = set(row['symbol'] for row in portfolio_rows)
+    current_prices = {}
+    
+    try:
+        mkt = vnstock.Market()
+        for symbol in symbols:
+            try:
+                eq = mkt.equity(symbol)
+                q = eq.quote()
+                if q is not None and not q.empty:
+                    p = float(q['close_price'].iloc[0])
+                    if p <= 0 or pd.isna(p):
+                        p = float(q['reference_price'].iloc[0])
+                    current_prices[symbol] = p
+            except SystemExit:
+                logger.warning(f"Lệnh portfolio bị chặn do đạt giới hạn API (Rate limit) khi check mã {symbol}.")
+                await wait_msg.edit_text("⏳ Đã đạt giới hạn 60 requests/phút. Không thể tải toàn bộ giá mới nhất. Vui lòng thử lại sau 1 phút!", parse_mode='HTML')
+                break
+            except Exception as e:
+                logger.error(f"Lỗi lấy giá cho {symbol}: {e}")
+    except Exception as e:
+        logger.error(f"Lỗi khởi tạo Market: {e}")
+            
+    total_invested = 0
+    total_current_value = 0
+    
+    # Gom tổng hợp theo từng mã
+    summary_by_symbol = {}
+    for row in portfolio_rows:
+        sym = row['symbol']
+        qty = row['quantity']
+        buy_p = float(row['buy_price'])
+        if buy_p < 1000:
+            buy_p *= 1000
+            
+        if sym not in summary_by_symbol:
+            summary_by_symbol[sym] = {'qty': 0, 'cost': 0}
+            
+        summary_by_symbol[sym]['qty'] += qty
+        summary_by_symbol[sym]['cost'] += (qty * buy_p)
+        
+    msg = "💼 <b>DANH MỤC ĐẦU TƯ CỦA BẠN</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+    
+    for sym, data in summary_by_symbol.items():
+        qty = data['qty']
+        cost = data['cost']
+        avg_price = cost / qty if qty > 0 else 0
+        
+        curr_p = current_prices.get(sym, avg_price)
+        curr_val = qty * curr_p
+        
+        pnl = curr_val - cost
+        pnl_pct = (pnl / cost) * 100 if cost > 0 else 0
+        
+        total_invested += cost
+        total_current_value += curr_val
+        
+        sign = "🟢" if pnl >= 0 else "🔴"
+        pnl_sign = "+" if pnl > 0 else ""
+        
+        msg += f"📌 <b>{sym}</b> | SL: <b>{config.format_number(qty, 0)}</b> CP\n"
+        msg += f"• Giá vốn: <code>{config.format_number(avg_price, 0)} đ</code>\n"
+        msg += f"• Giá TT: <code>{config.format_number(curr_p, 0)} đ</code>\n"
+        msg += f"• Lãi/Lỗ: {sign} <b>{pnl_sign}{config.format_number(pnl, 0)} đ ({pnl_sign}{config.format_number(pnl_pct, 2)}%)</b>\n"
+        msg += "──────────────────\n"
+        
+    total_pnl = total_current_value - total_invested
+    total_pnl_pct = (total_pnl / total_invested) * 100 if total_invested > 0 else 0
+    t_sign = "🟢" if total_pnl >= 0 else "🔴"
+    t_pnl_sign = "+" if total_pnl > 0 else ""
+    
+    msg += f"💰 <b>Tổng vốn đầu tư:</b> <code>{config.format_number(total_invested, 0)} đ</code>\n"
+    msg += f"💵 <b>Giá trị hiện tại:</b> <code>{config.format_number(total_current_value, 0)} đ</code>\n"
+    msg += f"📊 <b>Tổng Lãi/Lỗ:</b> {t_sign} <b>{t_pnl_sign}{config.format_number(total_pnl, 0)} đ ({t_pnl_sign}{config.format_number(total_pnl_pct, 2)}%)</b>\n"
+    
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [
+        [InlineKeyboardButton("🤖 AI Tư Vấn Danh Mục", callback_data=f"ai_port:{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await wait_msg.edit_text(msg, parse_mode='HTML', reply_markup=reply_markup)

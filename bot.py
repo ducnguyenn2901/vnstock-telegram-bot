@@ -490,6 +490,8 @@ def start_health_check_server():
     except Exception as e:
         print(f"⚠️ Không thể mở port web: {e}")
 
+from modules.intraday_scanner import run_scanner_job, scanner_command
+
 def main():
     """Điểm khởi chạy ứng dụng Telegram Bot."""
     token = config.TELEGRAM_BOT_TOKEN
@@ -521,15 +523,19 @@ def main():
     app.add_handler(CommandHandler("predict", predict_command))
     app.add_handler(CommandHandler("backtest", backtest_command))
     app.add_handler(CommandHandler("fund", fund_command))
+    app.add_handler(CommandHandler("scanner", scanner_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     
     # Thiết lập JobQueue cho Cảnh báo tự động (Alerts) và Đồng bộ dữ liệu (Cron Job)
     if app.job_queue:
-        # 1. Cảnh báo giá chạy mỗi 5 phút
+        # 1. Cảnh báo giá và quản lý rủi ro danh mục chạy mỗi 5 phút
         app.job_queue.run_repeating(check_alerts_job, interval=300, first=10)
         
-        # 2. Đồng bộ Kho Dữ Liệu EOD tự động lúc 15:20 (Giờ VN) từ Thứ 2 đến Thứ 6
+        # 2. Scanner quét toàn thị trường tìm Vol Breakout, Golden Cross chạy mỗi 30 phút
+        app.job_queue.run_repeating(run_scanner_job, interval=1800, first=60)
+        
+        # 3. Đồng bộ Kho Dữ Liệu EOD tự động lúc 15:20 (Giờ VN) từ Thứ 2 đến Thứ 6
         import datetime
         from modules.data_sync import sync_all_stocks_data
         vn_tz = datetime.timezone(datetime.timedelta(hours=7))

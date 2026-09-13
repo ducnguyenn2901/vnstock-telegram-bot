@@ -99,14 +99,14 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Lỗi khi gửi tin nhắn alert {alert['id']}: {e}")
 
-    # 2. Kiểm tra Rủi ro Danh mục (Risk Management) - Ngưỡng cắt lỗ -7%
+    # 2. Kiểm tra Quản trị Danh mục (Cắt lỗ -7% và Chốt lời +15%)
     if all_portfolios:
-        LOSS_THRESHOLD = -7.0  # -7%
+        LOSS_THRESHOLD = -7.0
+        PROFIT_THRESHOLD = 15.0
         
         with db.engine.begin() as conn:
-            # Sẽ có lỗi nếu chạy SQLite/Postgres chưa có bảng is_alerted, nhưng SQLAlchemy đã tự lo việc đó.
-            # Lấy danh sách portfolio chưa cảnh báo
-            res = conn.execute(text('SELECT * FROM portfolio WHERE quantity > 0 AND (is_alerted IS NULL OR is_alerted = 0)'))
+            # Lấy danh sách portfolio chưa được cảnh báo hoặc mới cảnh báo loại khác
+            res = conn.execute(text('SELECT * FROM portfolio WHERE quantity > 0.0001 AND (is_alerted IS NULL OR is_alerted IN (0, 1, 2))'))
             active_portfolios = [dict(row) for row in res.mappings().all()]
             
             for p in active_portfolios:
@@ -116,7 +116,6 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
                 curr_p = current_prices[sym]
                 buy_p = float(p['buy_price'])
                 
-                # Chuẩn hóa nếu giá mua được nhập dạng nghìn đồng
                 if buy_p < 1000 and curr_p >= 1000:
                     calc_buy_p = buy_p * 1000
                 else:
@@ -124,21 +123,34 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
                     
                 pnl_pct = ((curr_p - calc_buy_p) / calc_buy_p) * 100 if calc_buy_p > 0 else 0
                 
-                if pnl_pct <= LOSS_THRESHOLD:
+                is_alerted_status = p.get('is_alerted', 0) or 0
+                
+                # Cắt lỗ (-7%) -> Ghi is_alerted = 1
+                if pnl_pct <= LOSS_THRESHOLD and is_alerted_status != 1:
                     msg = (
-                        f"🛑 <b>CẢNH BÁO QUẢN TRỊ RỦI RO</b> 🛑\n\n"
+                        f"🛑 <b>CẢNH BÁO CẮT LỖ</b> 🛑\n\n"
                         f"Mã <b>{sym}</b> trong danh mục của bạn đã giảm <b>{config.format_number(pnl_pct, 2)}%</b>!\n"
                         f"🔹 Giá mua: {config.format_number(calc_buy_p, 0)} đ\n"
                         f"🔹 Giá thị trường: {config.format_number(curr_p, 0)} đ\n\n"
                         f"⚠️ <b>Lời khuyên:</b> Hãy cân nhắc tuân thủ kỷ luật cắt lỗ để bảo vệ an toàn nguồn vốn."
                     )
-                    
                     try:
-                        await context.bot.send_message(
-                            chat_id=p['user_id'],
-                            text=msg,
-                            parse_mode='HTML'
-                        )
+                        await context.bot.send_message(chat_id=p['user_id'], text=msg, parse_mode='HTML')
                         conn.execute(text("UPDATE portfolio SET is_alerted = 1 WHERE id = :pid"), {"pid": p['id']})
                     except Exception as e:
                         logger.error(f"Lỗi gửi Risk Alert cho user {p['user_id']}: {e}")
+                        
+                # Chốt lời (+15%) -> Ghi is_alerted = 2
+                elif pnl_pct >= PROFIT_THRESHOLD and is_alerted_status != 2:
+                    msg = (
+                        f"🎉 <b>CẢNH BÁO CHỐT LỜI</b> 🎉\n\n"
+                        f"Mã <b>{sym}</b> trong danh mục của bạn đã lãi <b>+{config.format_number(pnl_pct, 2)}%</b>!\n"
+                        f"🔹 Giá mua: {config.format_number(calc_buy_p, 0)} đ\n"
+                        f"🔹 Giá thị trường: {config.format_number(curr_p, 0)} đ\n\n"
+                        f"💡 <b>Lời khuyên:</b> Bạn có thể cân nhắc hiện thực hóa lợi nhuận hoặc nâng chặn lãi (trailing stop)."
+                    )
+                    try:
+                        await context.bot.send_message(chat_id=p['user_id'], text=msg, parse_mode='HTML')
+                        conn.execute(text("UPDATE portfolio SET is_alerted = 2 WHERE id = :pid"), {"pid": p['id']})
+                    except Exception as e:
+                        logger.error(f"Lỗi gửi Profit Alert cho user {p['user_id']}: {e}")

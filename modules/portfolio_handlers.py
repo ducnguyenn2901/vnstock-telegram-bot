@@ -39,8 +39,8 @@ def parse_number(val_str: str) -> float:
             
     return float(s)
 
-def format_qty(qty: float) -> str:
-    """Hiển thị số lượng: nếu là số nguyên thì không hiện số thập phân, nếu có lẻ thì hiện tối đa 4 số thập phân"""
+def format_decimal(qty: float) -> str:
+    """Hiển thị số lượng/giá: nếu là số nguyên thì không hiện số thập phân, nếu có lẻ thì hiện tối đa 4 số thập phân"""
     if qty == int(qty):
         return config.format_number(int(qty), 0)
     return f"{qty:,.4f}".rstrip('0').rstrip('.')
@@ -88,9 +88,9 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ <b>GHI NHẬN MUA THÀNH CÔNG</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 Mã tài sản: <b>{symbol}</b>\n"
-        f"📦 Khối lượng: <b>{format_qty(quantity)}</b> {unit_label}\n"
-        f"💵 Giá vốn / đơn vị: <b>{config.format_number(buy_price, 0)} đ</b>\n"
-        f"💰 Tổng giá trị đầu tư: <b>{config.format_number(quantity * buy_price, 0)} đ</b>\n\n"
+        f"📦 Khối lượng: <b>{format_decimal(quantity)}</b> {unit_label}\n"
+        f"💵 Giá vốn / đơn vị: <b>{format_decimal(buy_price)} đ</b>\n"
+        f"💰 Tổng giá trị đầu tư: <b>{format_decimal(quantity * buy_price)} đ</b>\n\n"
         f"<i>Gõ <code>/portfolio</code> để xem báo cáo danh mục tổng thể.</i>"
     )
     
@@ -128,11 +128,11 @@ async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif remaining > 0:
         sold = sell_qty - remaining
         await update.message.reply_text(
-            f"⚠️ Đã bán <b>{format_qty(sold)}</b> {symbol}. Còn dư <b>{format_qty(remaining)}</b> {unit_label} do vượt quá số lượng đang có.",
+            f"⚠️ Đã bán <b>{format_decimal(sold)}</b> {symbol}. Còn dư <b>{format_decimal(remaining)}</b> {unit_label} do vượt quá số lượng đang có.",
             parse_mode='HTML'
         )
     else:
-        await update.message.reply_text(f"✅ Đã bán thành công <b>{format_qty(sell_qty)}</b> {unit_label} <b>{symbol}</b> khỏi danh mục.", parse_mode='HTML')
+        await update.message.reply_text(f"✅ Đã bán thành công <b>{format_decimal(sell_qty)}</b> {unit_label} <b>{symbol}</b> khỏi danh mục.", parse_mode='HTML')
 
 async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -224,9 +224,9 @@ async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pnl_sign = "+" if pnl > 0 else ""
         unit_lbl = "CCQ" if (4 <= len(sym) <= 6 and not sym.startswith("FUE") and not sym.startswith("E1V")) else "CP"
         
-        msg += f"📌 <b>{sym}</b> | SL: <b>{format_qty(qty)}</b> {unit_lbl}\n"
-        msg += f"• Giá vốn: <code>{config.format_number(avg_price, 0)} đ</code>\n"
-        msg += f"• Giá TT: <code>{config.format_number(curr_p, 0)} đ</code>\n"
+        msg += f"📌 <b>{sym}</b> | SL: <b>{format_decimal(qty)}</b> {unit_lbl}\n"
+        msg += f"• Giá vốn: <code>{format_decimal(avg_price)} đ</code>\n"
+        msg += f"• Giá TT: <code>{format_decimal(curr_p)} đ</code>\n"
         msg += f"• Lãi/Lỗ: {sign} <b>{pnl_sign}{config.format_number(pnl, 0)} đ ({pnl_sign}{config.format_number(pnl_pct, 2)}%)</b>\n"
         msg += "──────────────────\n"
         

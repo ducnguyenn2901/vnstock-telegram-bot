@@ -208,6 +208,11 @@ async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for sym, data in summary_by_symbol.items():
         qty = data['qty']
+        
+        # Bỏ qua các mã rác do sai số dấu phẩy động (đã bán hết)
+        if qty < 0.0001:
+            continue
+            
         cost = data['cost']
         avg_price = cost / qty if qty > 0 else 0
         

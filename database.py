@@ -147,27 +147,29 @@ def buy_stock(user_id: int, symbol: str, quantity: int, buy_price: float):
 def get_portfolio(user_id: int):
     """Lấy danh sách các mã đang giữ của user."""
     with engine.connect() as conn:
-        res = conn.execute(text('SELECT * FROM portfolio WHERE user_id = :uid AND quantity > 0'), {"uid": user_id})
+        res = conn.execute(text('SELECT * FROM portfolio WHERE user_id = :uid AND quantity > 0.0001'), {"uid": user_id})
         return [dict(row) for row in res.mappings().all()]
 
-def sell_stock(user_id: int, symbol: str, sell_qty: int):
+def sell_stock(user_id: int, symbol: str, sell_qty: float):
     """Bán cổ phiếu (giảm khối lượng). Trả về số lượng còn lại chưa bán được."""
     with engine.begin() as conn:
         res = conn.execute(
-            text('SELECT * FROM portfolio WHERE user_id = :uid AND symbol = :sym AND quantity > 0 ORDER BY created_at ASC'), 
+            text('SELECT * FROM portfolio WHERE user_id = :uid AND symbol = :sym AND quantity > 0.0001 ORDER BY created_at ASC'), 
             {"uid": user_id, "sym": symbol.upper()}
         )
         rows = list(res.mappings().all())
         
-        remaining_to_sell = sell_qty
+        remaining_to_sell = float(sell_qty)
         for row in rows:
-            if remaining_to_sell <= 0:
+            if remaining_to_sell <= 0.0001:
+                remaining_to_sell = 0
                 break
                 
             r_id = row['id']
-            r_qty = row['quantity']
+            r_qty = float(row['quantity'])
             
-            if r_qty <= remaining_to_sell:
+            # Sai số dấu phẩy động 1e-5 để tránh trường hợp r_qty = 13.430000001 và remaining = 13.43
+            if r_qty <= remaining_to_sell + 1e-5:
                 conn.execute(text('UPDATE portfolio SET quantity = 0 WHERE id = :rid'), {"rid": r_id})
                 remaining_to_sell -= r_qty
             else:

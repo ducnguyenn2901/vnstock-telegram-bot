@@ -32,17 +32,27 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
         symbols.update(p['symbol'] for p in all_portfolios)
         
     current_prices = {}
+    from modules.fund_data import get_fund_info
+    
     try:
         mkt = vnstock.Market()
         for symbol in symbols:
             try:
-                eq = mkt.equity(symbol)
-                q = eq.quote()
-                if q is not None and not q.empty:
-                    p = float(q['close_price'].iloc[0])
-                    if p <= 0 or pd.isna(p):
-                        p = float(q['reference_price'].iloc[0])
-                    current_prices[symbol] = p
+                # Phân loại: Quỹ mở vs Cổ phiếu/ETF
+                is_mutual_fund = (4 <= len(symbol) <= 6) and not symbol.startswith("FUE") and not symbol.startswith("E1V")
+                
+                if is_mutual_fund:
+                    fund_info = get_fund_info(symbol)
+                    if fund_info and fund_info.get('nav'):
+                        current_prices[symbol] = fund_info['nav']
+                else:
+                    eq = mkt.equity(symbol)
+                    q = eq.quote()
+                    if q is not None and not q.empty:
+                        p = float(q['close_price'].iloc[0])
+                        if p <= 0 or pd.isna(p):
+                            p = float(q['reference_price'].iloc[0])
+                        current_prices[symbol] = p
             except SystemExit:
                 logger.warning(f"Cảnh báo tự động bị chặn do đạt giới hạn API (Rate limit) khi check mã {symbol}.")
                 break

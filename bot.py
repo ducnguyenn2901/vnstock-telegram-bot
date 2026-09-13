@@ -319,40 +319,63 @@ async def market_news_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(f"🌅 BẢN TIN SÁNG AI\n\n{ai_response}")
 
 async def shark_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh dò tìm dòng tiền cá mập"""
+    """Lệnh dò tìm dòng tiền cá mập (Chạy ngầm tránh block bot)"""
     args = context.args
     if not args:
         await update.message.reply_text("⚠️ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/shark TCB</code>", parse_mode=ParseMode.HTML)
         return
         
     symbol = args[0].upper().strip()
-    await update.message.reply_text(f"⏳ Đang dò quét dữ liệu khớp lệnh (tick-by-tick) của mã {symbol}...", parse_mode=ParseMode.HTML)
+    chat_id = update.message.chat_id
+    await update.message.reply_text(f"⏳ Đang chạy ngầm dò quét dữ liệu khớp lệnh cá mập cho mã <b>{symbol}</b>...\n<i>(Bot sẽ thông báo cho bạn ngay khi quét xong)</i>", parse_mode=ParseMode.HTML)
     
-    from modules.smart_money import get_shark_trades, format_shark_message
-    df_sharks = get_shark_trades(symbol, min_value_vnd=5_000_000_000) # Cấu hình > 5 tỷ
-    
-    msg = format_shark_message(symbol, df_sharks, min_value_vnd=5_000_000_000)
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    async def run_shark_task():
+        from modules.smart_money import get_shark_trades, format_shark_message
+        try:
+            # Chạy hàm đồng bộ trong thread riêng để không treo bot
+            df_sharks = await asyncio.to_thread(get_shark_trades, symbol, 5_000_000_000)
+            
+            # Xử lý kết quả trả về
+            if df_sharks is None:
+                await context.bot.send_message(chat_id=chat_id, text=f"❌ Mã cổ phiếu <b>{symbol}</b> không hợp lệ, không có dữ liệu, hoặc hệ thống đang bị giới hạn. Vui lòng kiểm tra lại!", parse_mode='HTML')
+            else:
+                msg = format_shark_message(symbol, df_sharks, min_value_vnd=5_000_000_000)
+                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                await context.bot.send_message(chat_id=chat_id, text=f"✅ <b>HOÀN TẤT:</b> Quá trình chạy ngầm dò quét mã {symbol} đã xong!", parse_mode='HTML')
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ Có lỗi xảy ra khi quét mã {symbol}: {e}")
+            
+    # Đẩy vào chạy nền
+    asyncio.create_task(run_shark_task())
 
 async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh dự báo AI Quant bằng Machine Learning"""
+    """Lệnh dự báo AI Quant bằng Machine Learning (Chạy ngầm)"""
     args = context.args
     if not args:
         await update.message.reply_text("⚠️ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/predict SSI</code>", parse_mode=ParseMode.HTML)
         return
         
     symbol = args[0].upper().strip()
-    await update.message.reply_text(f"🧠 Đang huấn luyện siêu mô hình Random Forest cho mã <b>{symbol}</b> dựa trên Kho dữ liệu. Quá trình này mất khoảng vài giây...", parse_mode=ParseMode.HTML)
+    chat_id = update.message.chat_id
+    await update.message.reply_text(f"🧠 Đang chạy ngầm huấn luyện mô hình ML cho mã <b>{symbol}</b>...\n<i>(Bot sẽ thông báo khi quá trình học hoàn tất)</i>", parse_mode=ParseMode.HTML)
     
-    import modules.ml_predictor as ml
-    # Chạy ML (có thể block thread nhẹ trong vài giây, nhưng dữ liệu ~100 dòng rất nhanh)
-    res = ml.train_and_predict(symbol, target_days=3)
-    msg = ml.format_prediction_message(res)
-    
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    async def run_predict_task():
+        import modules.ml_predictor as ml
+        try:
+            res = await asyncio.to_thread(ml.train_and_predict, symbol, 3)
+            if "error" in res:
+                await context.bot.send_message(chat_id=chat_id, text=f"❌ Mã cổ phiếu <b>{symbol}</b> không hợp lệ hoặc dữ liệu không đủ để huấn luyện.", parse_mode='HTML')
+            else:
+                msg = ml.format_prediction_message(res)
+                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                await context.bot.send_message(chat_id=chat_id, text=f"✅ <b>HOÀN TẤT:</b> Quá trình học máy mô hình cho {symbol} đã xong!", parse_mode='HTML')
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ Có lỗi trong quá trình học máy: {e}")
+            
+    asyncio.create_task(run_predict_task())
 
 async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh chạy Backtest lịch sử chiến lược"""
+    """Lệnh chạy Backtest lịch sử chiến lược (Chạy ngầm)"""
     args = context.args
     if len(args) < 2:
         await update.message.reply_text("⚠️ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/backtest TCB breakout</code>\n(Chiến lược: breakout, squeeze, uptrend)", parse_mode=ParseMode.HTML)
@@ -360,14 +383,24 @@ async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     symbol = args[0].upper().strip()
     strategy = args[1].lower().strip()
+    chat_id = update.message.chat_id
     
-    await update.message.reply_text(f"🧪 Đang chạy cỗ máy thời gian mô phỏng chiến lược <b>{strategy}</b> trên mã <b>{symbol}</b>. Vui lòng chờ...", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"🧪 Đang chạy ngầm cỗ máy thời gian mô phỏng chiến lược <b>{strategy}</b> trên mã <b>{symbol}</b>...\n<i>(Bạn cứ làm việc khác, bot sẽ gửi báo cáo khi xong)</i>", parse_mode=ParseMode.HTML)
     
-    import modules.backtester as bt
-    res = bt.run_backtest(symbol, strategy)
-    msg = bt.format_backtest_report(res)
-    
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    async def run_backtest_task():
+        import modules.backtester as bt
+        try:
+            res = await asyncio.to_thread(bt.run_backtest, symbol, strategy)
+            if "error" in res:
+                await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi Backtest: <b>{res.get('error', 'Mã cổ phiếu không hợp lệ hoặc dữ liệu không đủ.')}</b>", parse_mode='HTML')
+            else:
+                msg = bt.format_backtest_report(res)
+                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                await context.bot.send_message(chat_id=chat_id, text=f"✅ <b>HOÀN TẤT:</b> Quá trình Backtest mô phỏng mã {symbol} đã xong!", parse_mode='HTML')
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ Có lỗi trong quá trình Backtest: {e}")
+            
+    asyncio.create_task(run_backtest_task())
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bắt các tin nhắn dạng text thông thường."""
@@ -384,10 +417,23 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh kích hoạt đồng bộ dữ liệu EOD (Local Data Warehouse)"""
-    from modules.data_sync import sync_all_stocks_data
+    chat_id = update.message.chat_id
     await update.message.reply_text("⏳ Đang khởi chạy tiến trình đồng bộ Kho dữ liệu (VN100)... Việc này sẽ diễn ra ngầm và tốn khoảng 3-5 phút.", parse_mode=ParseMode.HTML)
+    
+    async def run_sync_task():
+        from modules.data_sync import sync_all_stocks_data
+        try:
+            await sync_all_stocks_data(context)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ <b>TỰ ĐỘNG ĐỒNG BỘ HOÀN TẤT</b>\nĐã tải xong dữ liệu EOD cho các mã VN100 vào Kho dữ liệu nội bộ (Supabase/SQLite).",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi chạy ngầm (Sync): {str(e)}")
+            
     # Chạy task nền
-    asyncio.create_task(sync_all_stocks_data(context))
+    asyncio.create_task(run_sync_task())
 
 def start_health_check_server():
     """Khởi động web server mini để Render nhận diện port và duy trì kết nối."""

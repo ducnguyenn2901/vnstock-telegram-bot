@@ -445,10 +445,18 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     
-    # Thiết lập JobQueue cho Cảnh báo tự động (Alerts) chạy mỗi 5 phút (300 giây)
-    # Lần chạy đầu tiên sẽ diễn ra sau 10 giây
+    # Thiết lập JobQueue cho Cảnh báo tự động (Alerts) và Đồng bộ dữ liệu (Cron Job)
     if app.job_queue:
+        # 1. Cảnh báo giá chạy mỗi 5 phút
         app.job_queue.run_repeating(check_alerts_job, interval=300, first=10)
+        
+        # 2. Đồng bộ Kho Dữ Liệu EOD tự động lúc 15:20 (Giờ VN) từ Thứ 2 đến Thứ 6
+        import datetime
+        from modules.data_sync import sync_all_stocks_data
+        vn_tz = datetime.timezone(datetime.timedelta(hours=7))
+        sync_time = datetime.time(hour=15, minute=20, tzinfo=vn_tz)
+        app.job_queue.run_daily(sync_all_stocks_data, time=sync_time, days=(1, 2, 3, 4, 5))
+        print("⏰ Đã thiết lập Cron Job đồng bộ dữ liệu lúc 15:20 tự động (T2-T6).")
         
     print("✅ Bot đang hoạt động! Nhấn Ctrl+C để dừng bot.")
     app.run_polling()

@@ -33,6 +33,8 @@ logger = logging.getLogger("VnstockBot")
 VNSTOCK_API_KEY = os.getenv("VNSTOCK_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 # Khởi tạo API Key cho vnstock nếu có
 if VNSTOCK_API_KEY and VNSTOCK_API_KEY != "YOUR_TELEGRAM_BOT_TOKEN_HERE":

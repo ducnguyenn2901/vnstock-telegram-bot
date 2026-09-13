@@ -26,15 +26,16 @@ async def sync_all_stocks_data(context):
         end_date = today.strftime("%Y-%m-%d")
         
         # Kiểm tra xem mã nào đã được cập nhật hôm nay rồi thì bỏ qua
-        import sqlite3
-        conn = sqlite3.connect(db.DB_PATH)
-        cursor = conn.cursor()
+        from sqlalchemy import text
+        from database import engine
+        
         try:
-            cursor.execute("SELECT DISTINCT symbol FROM price_history WHERE date >= ?", (end_date,))
-            updated_syms = [r[0] for r in cursor.fetchall()]
-        except:
+            with engine.connect() as conn:
+                res = conn.execute(text("SELECT DISTINCT symbol FROM price_history WHERE date >= :edate"), {"edate": end_date})
+                updated_syms = [row[0] for row in res.fetchall()]
+        except Exception as e:
+            logger.warning(f"Chưa có bảng price_history hoặc lỗi đọc DB: {e}")
             updated_syms = []
-        conn.close()
         
         symbols = [s for s in symbols if s not in updated_syms]
         
@@ -70,29 +71,54 @@ async def sync_all_stocks_data(context):
             # Chuẩn hóa cột
             final_df.rename(columns={'time': 'date'}, inplace=True)
             
-            # Ghi vào SQLite an toàn (không ghi đè mất dữ liệu cũ nếu tiến trình bị ngắt nửa chừng)
-            import sqlite3
-            conn = sqlite3.connect(db.DB_PATH)
+            # Ghi vào SQLite/Postgres an toàn (Upsert)
+            from sqlalchemy import text
+            from database import engine
             
-            # Ghi vào bảng tạm
-            final_df[['symbol', 'date', 'open', 'high', 'low', 'close', 'volume']].to_sql('price_history_temp', conn, if_exists='replace', index=False)
+            # Ghi dữ liệu trực tiếp bằng index và ON CONFLICT DO UPDATE (nếu Postgres) hoặc REPLACE (nếu SQLite)
+            # Tuy nhiên, cách an toàn nhất hỗ trợ cả hai: ghi vào bảng tạm, sau đó dùng SQL MERGE/REPLACE.
             
-            # Insert or replace vào bảng chính
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO price_history (symbol, date, open, high, low, close, volume)
-                SELECT symbol, date, open, high, low, close, volume FROM price_history_temp
-            ''')
-            
-            # Dọn dẹp bảng tạm
-            cursor.execute("DROP TABLE price_history_temp")
-            
-            # Tạo index cho bảng mới (để truy vấn nhanh)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbol_date ON price_history(symbol, date);")
-            conn.commit()
-            conn.close()
+            with engine.begin() as conn:
+                # Ghi vào bảng tạm
+                temp_table_name = 'price_history_temp'
+                final_df[['symbol', 'date', 'open', 'high', 'low', 'close', 'volume']].to_sql(
+                    temp_table_name, engine, if_exists='replace', index=False
+                )
+                
+                # Thực hiện truy vấn Upsert tùy vào loại database
+                if engine.dialect.name == 'postgresql':
+                    conn.execute(text(f"""
+                        INSERT INTO price_history (symbol, date, open, high, low, close, volume)
+                        SELECT symbol, date, open, high, low, close, volume FROM {temp_table_name}
+                        ON CONFLICT (symbol, date) DO UPDATE SET
+                            open = EXCLUDED.open,
+                            high = EXCLUDED.high,
+                            low = EXCLUDED.low,
+                            close = EXCLUDED.close,
+                            volume = EXCLUDED.volume;
+                    """))
+                else:
+                    # SQLite
+                    conn.execute(text(f"""
+                        INSERT OR REPLACE INTO price_history (symbol, date, open, high, low, close, volume)
+                        SELECT symbol, date, open, high, low, close, volume FROM {temp_table_name}
+                    """))
+                    
+                # Xóa bảng tạm
+                conn.execute(text(f"DROP TABLE {temp_table_name}"))
             
             logger.info(f"Đã đồng bộ thành công dữ liệu lịch sử cho {len(all_data)} mã cổ phiếu (VN100).")
+            
+            import config
+            if config.ADMIN_CHAT_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=config.ADMIN_CHAT_ID,
+                        text=f"🔄 <b>TỰ ĐỘNG ĐỒNG BỘ HOÀN TẤT</b>\nĐã tải xong dữ liệu EOD cho {len(all_data)} mã VN100 vào Kho dữ liệu nội bộ.",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logger.error(f"Không thể gửi tin báo cáo cho admin: {e}")
         
     except Exception as e:
         logger.error(f"Lỗi trong quá trình đồng bộ: {e}")

@@ -95,11 +95,16 @@ async def run_scanner_job(context: ContextTypes.DEFAULT_TYPE):
                     "signals": sym_signals
                 })
                 
+            # Xóa biến để giải phóng RAM cho Render (giới hạn 512MB)
+            del df
+            import gc
+            gc.collect()
+                
         except Exception as e:
             logger.debug(f"Lỗi quét mã {sym}: {e}")
             
-        # Nghỉ 1 giây để an toàn cho rate limit
-        await asyncio.sleep(1)
+        # Nghỉ 2 giây để an toàn cho rate limit và giảm tải CPU/RAM
+        await asyncio.sleep(2)
         
     # Cập nhật Cache
     SCANNER_CACHE["time"] = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")

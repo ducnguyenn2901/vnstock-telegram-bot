@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from sqlalchemy import create_engine, text, MetaData, Table, Column, Integer, String, Float, DateTime
+from sqlalchemy import create_engine, text, MetaData, Table, Column, Integer, BigInteger, String, Float, DateTime
 from sqlalchemy.sql import func
 from config import BASE_DIR, DATABASE_URL
 import logging
@@ -11,7 +11,6 @@ DB_PATH = os.path.join(BASE_DIR, "bot_database.db")
 
 # 1. Thiết lập Động cơ kết nối (Engine) hỗ trợ tự động Supabase hoặc SQLite
 if DATABASE_URL:
-    # SQLAlchemy yêu cầu giao thức là postgresql:// thay vì postgres://
     db_url = DATABASE_URL.replace("postgres://", "postgresql://")
     engine = create_engine(db_url, pool_size=10, max_overflow=20)
     logger.info("🟢 Đã kết nối với Supabase PostgreSQL (Cloud).")
@@ -25,7 +24,7 @@ metadata = MetaData()
 alerts_table = Table(
     'alerts', metadata,
     Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, nullable=False),
+    Column('user_id', BigInteger, nullable=False),
     Column('symbol', String, nullable=False),
     Column('condition_type', String, nullable=False),
     Column('operator', String, nullable=False),
@@ -36,7 +35,7 @@ alerts_table = Table(
 
 users_table = Table(
     'users', metadata,
-    Column('user_id', Integer, primary_key=True),
+    Column('user_id', BigInteger, primary_key=True),
     Column('username', String),
     Column('tier', String, default='free'),
     Column('created_at', DateTime, server_default=func.now())
@@ -45,7 +44,7 @@ users_table = Table(
 portfolio_table = Table(
     'portfolio', metadata,
     Column('id', Integer, primary_key=True),
-    Column('user_id', Integer, nullable=False),
+    Column('user_id', BigInteger, nullable=False),
     Column('symbol', String, nullable=False),
     Column('quantity', Integer, nullable=False),
     Column('buy_price', Float, nullable=False),
@@ -67,6 +66,15 @@ price_history_table = Table(
 def init_db():
     """Khởi tạo cấu trúc cơ sở dữ liệu"""
     metadata.create_all(engine)
+    # Tự động fix lỗi kiểu dữ liệu Integer -> BigInteger cho các DB Postgres đã trót tạo trước đó
+    if engine.dialect.name == 'postgresql':
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE alerts ALTER COLUMN user_id TYPE BIGINT;"))
+                conn.execute(text("ALTER TABLE users ALTER COLUMN user_id TYPE BIGINT;"))
+                conn.execute(text("ALTER TABLE portfolio ALTER COLUMN user_id TYPE BIGINT;"))
+        except Exception as e:
+            logger.warning(f"Lỗi khi tự động nâng cấp kiểu dữ liệu BIGINT (có thể do bảng chưa có): {e}")
 
 def get_all_price_history(symbols=None):
     """Lấy dữ liệu giá lịch sử. Nếu symbols=None, lấy toàn bộ."""

@@ -57,20 +57,50 @@ def get_ai_evaluation(symbol: str) -> str:
         logger.error(f"Lỗi khi gọi AI phân tích {symbol}: {e}")
         return "❌ Đã có lỗi xảy ra khi kết nối với AI. Vui lòng thử lại sau."
 
-def chat_with_ai(user_message: str) -> str:
-    """Cho phép chat tự do với AI."""
+def chat_with_ai(user_message: str, user_id: int = None) -> str:
+    """Cho phép chat tự do với AI có bộ nhớ (Memory)."""
     if not config.GEMINI_API_KEY:
         return "❌ Tính năng AI chưa được cấu hình. (Thiếu GEMINI_API_KEY)"
         
     try:
-        system_prompt = "Bạn là trợ lý AI chuyên về chứng khoán Việt Nam (Vnstock Telegram Bot). Nhiệm vụ của bạn là giải đáp thắc mắc về thị trường, cách đầu tư hoặc cung cấp thông tin chung cho người dùng bằng tiếng Việt, ngắn gọn, thân thiện và hữu ích. Bạn có thể sử dụng emoji. Nếu người dùng hỏi mã cổ phiếu cụ thể, khuyên họ gõ /analyze <MÃ> hoặc dùng tính năng có sẵn của bot."
+        import database as db
+        system_prompt = "Bạn là trợ lý AI chuyên về chứng khoán Việt Nam (Vnstock Telegram Bot). Nhiệm vụ của bạn là giải đáp thắc mắc về thị trường, cách đầu tư hoặc cung cấp thông tin chung cho người dùng bằng tiếng Việt, ngắn gọn, thân thiện và hữu ích. Nhớ xem lại lịch sử trò chuyện để hiểu bối cảnh và danh mục của người dùng nếu họ đề cập đến."
         
         model = genai.GenerativeModel(
             "gemini-3.5-flash",
             system_instruction=system_prompt
         )
-        response = model.generate_content(user_message)
-        return response.text
+        
+        history_formatted = []
+        if user_id:
+            try:
+                raw_history = db.get_chat_history(user_id, limit=10)
+                for row in raw_history:
+                    role = row['role']
+                    # Gemini expects 'user' or 'model'
+                    if role not in ['user', 'model']:
+                        role = 'user'
+                    history_formatted.append({
+                        "role": role,
+                        "parts": [row['content']]
+                    })
+            except Exception as db_e:
+                logger.error(f"Lỗi đọc lịch sử chat: {db_e}")
+                
+        # Khởi tạo phiên chat với bộ nhớ
+        chat = model.start_chat(history=history_formatted)
+        response = chat.send_message(user_message)
+        reply = response.text
+        
+        # Lưu vào lịch sử
+        if user_id:
+            try:
+                db.save_chat_message(user_id, "user", user_message)
+                db.save_chat_message(user_id, "model", reply)
+            except Exception as db_save_e:
+                logger.error(f"Lỗi lưu lịch sử chat: {db_save_e}")
+                
+        return reply
     except Exception as e:
         logger.error(f"Lỗi AI Chat: {e}")
         return "❌ Xin lỗi, tôi không thể trả lời lúc này do lỗi hệ thống AI."

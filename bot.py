@@ -89,12 +89,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 <code>/predict &lt;MÃ&gt;</code> - Dự báo xu hướng (AI Quant)\n"
         "🔹 <code>/backtest &lt;MÃ&gt; &lt;CL&gt;</code> - Test chiến lược quá khứ\n"
         "🔹 <code>/screen</code> - Máy quét cổ phiếu tiềm năng\n"
+        "🔹 <code>/fund &lt;MÃ&gt;</code> - Tra cứu Chứng chỉ Quỹ Mở (Ví dụ: VESAF, DCDS)\n"
         "🔹 <code>/sync</code> - Đồng bộ Kho Dữ Liệu nội bộ\n\n"
         "<b>Quản lý Danh mục:</b>\n"
         "🔹 <code>/buy &lt;MÃ&gt; &lt;KL&gt; &lt;GIÁ&gt;</code> - Mua cổ phiếu\n"
         "🔹 <code>/sell &lt;MÃ&gt; &lt;KL&gt;</code> - Bán cổ phiếu\n"
         "🔹 <code>/portfolio</code> - Xem tổng kết lãi/lỗ\n\n"
-        "💡 <i>Mẹo: Gõ trực tiếp tên mã (VD: <b>VNM</b>) vào chat để tôi phân tích nhé!</i>"
+        "💡 <i>Mẹo: Gõ trực tiếp tên mã (VD: <b>VNM</b> hoặc <b>VESAF</b>) vào chat để tôi phân tích nhé!</i>"
     )
     await update.message.reply_text(welcome_text, parse_mode=ParseMode.HTML)
 
@@ -402,18 +403,48 @@ async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     asyncio.create_task(run_backtest_task())
 
+async def fund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xử lý lệnh /fund <MÃ> cho quỹ mở"""
+    if not context.args:
+        await update.message.reply_text("⚠️ Vui lòng nhập mã chứng chỉ quỹ mở. Ví dụ: <code>/fund VESAF</code>", parse_mode=ParseMode.HTML)
+        return
+        
+    symbol = context.args[0].upper().strip()
+    msg = await update.message.reply_text(f"⏳ Đang tra cứu thông tin Quỹ Mở <b>{symbol}</b>...", parse_mode=ParseMode.HTML)
+    
+    import modules.fund_data as fd
+    # Gọi qua to_thread vì fmarket API có thể chậm
+    data = await asyncio.to_thread(fd.get_fund_info, symbol)
+    html = fd.format_fund_html(data)
+    await msg.edit_text(html, parse_mode=ParseMode.HTML)
+
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bắt các tin nhắn dạng text thông thường."""
     text = update.message.text.strip()
     text_upper = text.upper()
-    if len(text_upper) == 3 and text_upper.isalpha():
+    
+    # Tự động nhận diện Mã cổ phiếu (3 chữ cái) hoặc ETF (bắt đầu bằng FUE, E1V)
+    is_stock_or_etf = (len(text_upper) == 3 and text_upper.isalpha()) or text_upper.startswith("FUE") or text_upper.startswith("E1V")
+    # Tự động nhận diện Quỹ Mở (4-6 chữ cái)
+    is_open_fund = 4 <= len(text_upper) <= 6 and text_upper.isalpha() and not is_stock_or_etf
+
+    if is_stock_or_etf:
         context.args = [text_upper]
         await analyze_command(update, context)
+    elif is_open_fund:
+        context.args = [text_upper]
+        await fund_command(update, context)
     else:
-        # Xử lý chat tự do với AI
+        # Xử lý chat tự do với AI có bộ nhớ
         await update.message.chat.send_action(action="typing")
-        ai_reply = ai_module.chat_with_ai(text)
-        await update.message.reply_text(ai_reply)
+        user_id = update.message.from_user.id
+        
+        try:
+            # Chạy ngầm tránh block bot
+            ai_reply = await asyncio.to_thread(ai_module.chat_with_ai, text, user_id)
+            await update.message.reply_text(ai_reply)
+        except Exception as e:
+            await update.message.reply_text(f"❌ AI gặp lỗi: {e}")
 
 async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh kích hoạt đồng bộ dữ liệu EOD (Local Data Warehouse)"""
@@ -488,6 +519,7 @@ def main():
     app.add_handler(CommandHandler("shark", shark_command))
     app.add_handler(CommandHandler("predict", predict_command))
     app.add_handler(CommandHandler("backtest", backtest_command))
+    app.add_handler(CommandHandler("fund", fund_command))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     

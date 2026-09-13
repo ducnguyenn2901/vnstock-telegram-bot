@@ -63,6 +63,15 @@ price_history_table = Table(
     Column('volume', Integer)
 )
 
+chat_history_table = Table(
+    'chat_history', metadata,
+    Column('id', Integer, primary_key=True),
+    Column('user_id', BigInteger, nullable=False),
+    Column('role', String, nullable=False), # 'user' hoặc 'model'
+    Column('content', String, nullable=False),
+    Column('created_at', DateTime, server_default=func.now())
+)
+
 def init_db():
     """Khởi tạo cấu trúc cơ sở dữ liệu"""
     metadata.create_all(engine)
@@ -165,6 +174,26 @@ def sell_stock(user_id: int, symbol: str, sell_qty: int):
                 remaining_to_sell = 0
                 
         return remaining_to_sell
+
+def save_chat_message(user_id: int, role: str, content: str):
+    """Lưu tin nhắn chat vào lịch sử"""
+    with engine.begin() as conn:
+        stmt = chat_history_table.insert().values(
+            user_id=user_id, role=role, content=content
+        )
+        conn.execute(stmt)
+
+def get_chat_history(user_id: int, limit: int = 15):
+    """Lấy N tin nhắn gần nhất, sắp xếp theo thời gian tăng dần để AI đọc"""
+    with engine.connect() as conn:
+        # Lấy DESC để lấy N tin nhắn mới nhất, sau đó đảo ngược list để đúng thứ tự thời gian
+        res = conn.execute(text('''
+            SELECT role, content FROM chat_history 
+            WHERE user_id = :uid 
+            ORDER BY created_at DESC LIMIT :lmt
+        '''), {"uid": user_id, "lmt": limit})
+        rows = res.mappings().all()
+        return list(reversed(rows))
 
 if __name__ == "__main__":
     init_db()

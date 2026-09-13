@@ -8,26 +8,66 @@ import config
 
 logger = logging.getLogger("PortfolioHandlers")
 
+def parse_number(val_str: str) -> float:
+    """Chuyển đổi chuỗi số người dùng nhập (hỗ trợ dấu . và , cho cả số thập phân và phân cách nghìn)"""
+    s = str(val_str).strip().replace(" ", "")
+    if not s:
+        raise ValueError("Chuỗi rỗng")
+        
+    if "." in s and "," in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        parts = s.split(",")
+        if len(parts) == 2 and len(parts[1]) != 3:
+            s = s.replace(",", ".")
+        elif len(parts) > 2:
+            s = s.replace(",", "")
+        else:
+            if float(parts[0]) < 100:
+                s = s.replace(",", ".")
+            else:
+                s = s.replace(",", "")
+    elif "." in s:
+        parts = s.split(".")
+        if len(parts) > 2:
+            s = s.replace(".", "")
+        elif len(parts) == 2 and len(parts[1]) == 3 and float(parts[0]) >= 100:
+            s = s.replace(".", "")
+            
+    return float(s)
+
+def format_qty(qty: float) -> str:
+    """Hiển thị số lượng: nếu là số nguyên thì không hiện số thập phân, nếu có lẻ thì hiện tối đa 4 số thập phân"""
+    if qty == int(qty):
+        return config.format_number(int(qty), 0)
+    return f"{qty:,.4f}".rstrip('0').rstrip('.')
+
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Xử lý lệnh /buy
     Cú pháp: /buy <mã> <khối lượng> <giá mua>
-    VD: /buy TCB 1000 35000 hoặc /buy TCB 1000 35.0
+    VD: /buy TCB 1000 35000 hoặc /buy DCDS 13.43 111690
     """
     user_id = update.effective_user.id
     args = context.args
     
     if len(args) < 3:
         await update.message.reply_text(
-            "❌ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/buy TCB 1000 35000</code> hoặc <code>/buy HPG 500 26.5</code>",
+            "❌ <b>Cú pháp chưa đúng!</b>\n"
+            "Ví dụ Cổ phiếu: <code>/buy TCB 1000 35000</code>\n"
+            "Ví dụ Quỹ Mở: <code>/buy DCDS 13.43 111690</code>\n"
+            "<i>(Khối lượng có thể là số lẻ, giá là giá mua 1 cổ phiếu hoặc 1 CCQ)</i>",
             parse_mode='HTML'
         )
         return
         
     symbol = args[0].upper().strip()
     try:
-        quantity = int(args[1])
-        buy_price = float(args[2].replace(",", ""))
+        quantity = parse_number(args[1])
+        buy_price = parse_number(args[2])
     except ValueError:
         await update.message.reply_text("❌ Khối lượng và giá mua phải là số hợp lệ.", parse_mode='HTML')
         return
@@ -36,19 +76,21 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Khối lượng và giá phải lớn hơn 0.", parse_mode='HTML')
         return
 
-    # Tự động quy đổi nếu nhập giá < 1000 (ví dụ 35 -> 35000)
+    # Tự động quy đổi nếu nhập giá < 1000 (ví dụ cổ phiếu giá 35 -> 35000)
     if buy_price < 1000:
         buy_price = buy_price * 1000
         
     db.buy_stock(user_id, symbol, quantity, buy_price)
     
+    unit_label = "CCQ" if (4 <= len(symbol) <= 6 and not symbol.startswith("FUE") and not symbol.startswith("E1V")) else "cổ phiếu"
+    
     msg = (
-        f"✅ <b>GHI NHẬN MUA CỔ PHIẾU THÀNH CÔNG</b>\n"
+        f"✅ <b>GHI NHẬN MUA THÀNH CÔNG</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 Mã cổ phiếu: <b>{symbol}</b>\n"
-        f"📦 Khối lượng: <b>{config.format_number(quantity, 0)}</b> cổ phiếu\n"
-        f"💵 Giá mua: <b>{config.format_number(buy_price, 0)} đ</b>\n"
-        f"💰 Tổng giá trị: <b>{config.format_number(quantity * buy_price, 0)} đ</b>\n\n"
+        f"📌 Mã tài sản: <b>{symbol}</b>\n"
+        f"📦 Khối lượng: <b>{format_qty(quantity)}</b> {unit_label}\n"
+        f"💵 Giá vốn / đơn vị: <b>{config.format_number(buy_price, 0)} đ</b>\n"
+        f"💰 Tổng giá trị đầu tư: <b>{config.format_number(quantity * buy_price, 0)} đ</b>\n\n"
         f"<i>Gõ <code>/portfolio</code> để xem báo cáo danh mục tổng thể.</i>"
     )
     
@@ -58,20 +100,20 @@ async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Xử lý lệnh /sell
     Cú pháp: /sell <mã> <khối lượng>
-    VD: /sell TCB 500
+    VD: /sell TCB 500 hoặc /sell DCDS 13.43
     """
     user_id = update.effective_user.id
     args = context.args
     
     if len(args) < 2:
-        await update.message.reply_text("❌ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/sell TCB 500</code>", parse_mode='HTML')
+        await update.message.reply_text("❌ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/sell TCB 500</code> hoặc <code>/sell DCDS 13.43</code>", parse_mode='HTML')
         return
         
     symbol = args[0].upper().strip()
     try:
-        sell_qty = int(args[1])
+        sell_qty = parse_number(args[1])
     except ValueError:
-        await update.message.reply_text("❌ Khối lượng bán phải là số nguyên.", parse_mode='HTML')
+        await update.message.reply_text("❌ Khối lượng bán phải là số hợp lệ.", parse_mode='HTML')
         return
         
     if sell_qty <= 0:
@@ -79,17 +121,18 @@ async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     remaining = db.sell_stock(user_id, symbol, sell_qty)
+    unit_label = "CCQ" if (4 <= len(symbol) <= 6 and not symbol.startswith("FUE") and not symbol.startswith("E1V")) else "cổ phiếu"
     
     if remaining == sell_qty:
         await update.message.reply_text(f"❌ Bạn không sở hữu mã <b>{symbol}</b> trong danh mục hoặc không đủ số lượng.", parse_mode='HTML')
     elif remaining > 0:
         sold = sell_qty - remaining
         await update.message.reply_text(
-            f"⚠️ Đã bán <b>{config.format_number(sold, 0)}</b> {symbol}. Còn dư <b>{config.format_number(remaining, 0)}</b> cổ phiếu do vượt quá số lượng đang có.",
+            f"⚠️ Đã bán <b>{format_qty(sold)}</b> {symbol}. Còn dư <b>{format_qty(remaining)}</b> {unit_label} do vượt quá số lượng đang có.",
             parse_mode='HTML'
         )
     else:
-        await update.message.reply_text(f"✅ Đã bán thành công <b>{config.format_number(sell_qty, 0)}</b> cổ phiếu <b>{symbol}</b> khỏi danh mục.", parse_mode='HTML')
+        await update.message.reply_text(f"✅ Đã bán thành công <b>{format_qty(sell_qty)}</b> {unit_label} <b>{symbol}</b> khỏi danh mục.", parse_mode='HTML')
 
 async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -179,8 +222,9 @@ async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         sign = "🟢" if pnl >= 0 else "🔴"
         pnl_sign = "+" if pnl > 0 else ""
+        unit_lbl = "CCQ" if (4 <= len(sym) <= 6 and not sym.startswith("FUE") and not sym.startswith("E1V")) else "CP"
         
-        msg += f"📌 <b>{sym}</b> | SL: <b>{config.format_number(qty, 0)}</b> CP\n"
+        msg += f"📌 <b>{sym}</b> | SL: <b>{format_qty(qty)}</b> {unit_lbl}\n"
         msg += f"• Giá vốn: <code>{config.format_number(avg_price, 0)} đ</code>\n"
         msg += f"• Giá TT: <code>{config.format_number(curr_p, 0)} đ</code>\n"
         msg += f"• Lãi/Lỗ: {sign} <b>{pnl_sign}{config.format_number(pnl, 0)} đ ({pnl_sign}{config.format_number(pnl_pct, 2)}%)</b>\n"

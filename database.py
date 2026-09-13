@@ -46,7 +46,7 @@ portfolio_table = Table(
     Column('id', Integer, primary_key=True),
     Column('user_id', BigInteger, nullable=False),
     Column('symbol', String, nullable=False),
-    Column('quantity', Integer, nullable=False),
+    Column('quantity', Float, nullable=False),
     Column('buy_price', Float, nullable=False),
     Column('created_at', DateTime, server_default=func.now()),
     Column('is_alerted', Integer, default=0)
@@ -75,15 +75,17 @@ chat_history_table = Table(
 def init_db():
     """Khởi tạo cấu trúc cơ sở dữ liệu"""
     metadata.create_all(engine)
-    # Tự động fix lỗi kiểu dữ liệu Integer -> BigInteger cho các DB Postgres đã trót tạo trước đó
+    # Tự động fix lỗi kiểu dữ liệu Integer -> BigInteger/Float cho Postgres
     if engine.dialect.name == 'postgresql':
         try:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE alerts ALTER COLUMN user_id TYPE BIGINT;"))
                 conn.execute(text("ALTER TABLE users ALTER COLUMN user_id TYPE BIGINT;"))
                 conn.execute(text("ALTER TABLE portfolio ALTER COLUMN user_id TYPE BIGINT;"))
+                conn.execute(text("ALTER TABLE portfolio ALTER COLUMN quantity TYPE DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE chat_history ALTER COLUMN user_id TYPE BIGINT;"))
         except Exception as e:
-            logger.warning(f"Lỗi khi tự động nâng cấp kiểu dữ liệu BIGINT (có thể do bảng chưa có): {e}")
+            logger.warning(f"Lỗi khi tự động nâng cấp kiểu dữ liệu: {e}")
 
 def get_all_price_history(symbols=None):
     """Lấy dữ liệu giá lịch sử. Nếu symbols=None, lấy toàn bộ."""

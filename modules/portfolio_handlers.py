@@ -114,21 +114,31 @@ async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         mkt = vnstock.Market()
+        import modules.fund_data as fd
         for symbol in symbols:
             try:
+                # 1. Thử lấy giá cổ phiếu/ETF trên sàn
                 eq = mkt.equity(symbol)
                 q = eq.quote()
-                if q is not None and not q.empty:
+                if q is not None and not q.empty and 'close_price' in q.columns:
                     p = float(q['close_price'].iloc[0])
                     if p <= 0 or pd.isna(p):
                         p = float(q['reference_price'].iloc[0])
-                    current_prices[symbol] = p
-            except SystemExit:
-                logger.warning(f"Lệnh portfolio bị chặn do đạt giới hạn API (Rate limit) khi check mã {symbol}.")
-                await wait_msg.edit_text("⏳ Đã đạt giới hạn 60 requests/phút. Không thể tải toàn bộ giá mới nhất. Vui lòng thử lại sau 1 phút!", parse_mode='HTML')
-                break
-            except Exception as e:
-                logger.error(f"Lỗi lấy giá cho {symbol}: {e}")
+                    if p > 0:
+                        current_prices[symbol] = p
+                        continue
+            except Exception:
+                pass
+                
+            # 2. Nếu không có giá sàn, thử tra cứu giá NAV của Quỹ Mở
+            try:
+                fund_res = fd.get_fund_info(symbol)
+                if fund_res.get("success"):
+                    nav = float(fund_res["info"].get("nav", 0))
+                    if nav > 0:
+                        current_prices[symbol] = nav
+            except Exception as fe:
+                logger.error(f"Lỗi lấy NAV quỹ mở cho {symbol}: {fe}")
     except Exception as e:
         logger.error(f"Lỗi khởi tạo Market: {e}")
             

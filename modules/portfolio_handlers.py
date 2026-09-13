@@ -48,8 +48,8 @@ def format_decimal(qty: float) -> str:
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Xử lý lệnh /buy
-    Cú pháp: /buy <mã> <khối lượng> <giá mua>
-    VD: /buy TCB 1000 35000 hoặc /buy DCDS 13.43 111690
+    Cú pháp 1 (Giá đơn vị): /buy <mã> <khối lượng> <giá 1 CP/CCQ> (VD: /buy TCB 1000 35000)
+    Cú pháp 2 (Tổng tiền nạp): /buy <mã> <khối lượng> <tổng tiền> (VD: /buy DCDS 15.95 1500000)
     """
     user_id = update.effective_user.id
     args = context.args
@@ -57,44 +57,68 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(args) < 3:
         await update.message.reply_text(
             "❌ <b>Cú pháp chưa đúng!</b>\n"
-            "Ví dụ Cổ phiếu: <code>/buy TCB 1000 35000</code>\n"
-            "Ví dụ Quỹ Mở: <code>/buy DCDS 13.43 111690</code>\n"
-            "<i>(Khối lượng có thể là số lẻ, giá là giá mua 1 cổ phiếu hoặc 1 CCQ)</i>",
+            "• Mua cổ phiếu: <code>/buy TCB 1000 35000</code>\n"
+            "• Mua quỹ theo giá NAV: <code>/buy DCDS 15.95 93997.38</code>\n"
+            "• Mua quỹ theo tổng tiền: <code>/buy DCDS 15.95 1500000</code>\n"
+            "<i>(Bot tự động chia giá vốn nếu số tiền nạp &gt; 500.000 đ)</i>",
             parse_mode='HTML'
         )
         return
         
     symbol = args[0].upper().strip()
     try:
-        quantity = parse_number(args[1])
-        buy_price = parse_number(args[2])
+        val1 = parse_number(args[1])
+        val2 = parse_number(args[2])
     except ValueError:
-        await update.message.reply_text("❌ Khối lượng và giá mua phải là số hợp lệ.", parse_mode='HTML')
+        await update.message.reply_text("❌ Khối lượng và giá/tiền mua phải là số hợp lệ.", parse_mode='HTML')
         return
         
-    if quantity <= 0 or buy_price <= 0:
+    if val1 <= 0 or val2 <= 0:
         await update.message.reply_text("❌ Khối lượng và giá phải lớn hơn 0.", parse_mode='HTML')
         return
 
+    # Tự động nhận diện nếu người dùng đảo vị trí (VD: /buy DCDS 1500000 15.95)
+    if val1 > 500_000 and val2 < 500_000:
+        quantity = val2
+        buy_price_raw = val1
+    else:
+        quantity = val1
+        buy_price_raw = val2
+
     # Tự động quy đổi nếu nhập giá < 1000 (ví dụ cổ phiếu giá 35 -> 35000)
-    if buy_price < 1000:
-        buy_price = buy_price * 1000
+    if buy_price_raw < 1000:
+        buy_price = buy_price_raw * 1000
+        is_total_cash = False
+    elif buy_price_raw > 500_000:
+        # Nếu nhập số tiền lớn (> 500.000 đ), tự động hiểu là Tổng tiền nạp cho đợt này
+        buy_price = buy_price_raw / quantity
+        is_total_cash = True
+    else:
+        buy_price = buy_price_raw
+        is_total_cash = False
         
     db.buy_stock(user_id, symbol, quantity, buy_price)
     
     unit_label = "CCQ" if (4 <= len(symbol) <= 6 and not symbol.startswith("FUE") and not symbol.startswith("E1V")) else "cổ phiếu"
+    
+    extra_note = "\n<i>💡 Bot đã tự động nhận diện tổng tiền nạp và quy đổi giá vốn cho bạn.</i>" if is_total_cash else ""
     
     msg = (
         f"✅ <b>GHI NHẬN MUA THÀNH CÔNG</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📌 Mã tài sản: <b>{symbol}</b>\n"
         f"📦 Khối lượng: <b>{format_decimal(quantity)}</b> {unit_label}\n"
-        f"💵 Giá vốn / đơn vị: <b>{format_decimal(buy_price)} đ</b>\n"
-        f"💰 Tổng giá trị đầu tư: <b>{format_decimal(quantity * buy_price)} đ</b>\n\n"
-        f"<i>Gõ <code>/portfolio</code> để xem báo cáo danh mục tổng thể.</i>"
+        f"💵 Giá vốn quy đổi: <b>{format_decimal(buy_price)} đ</b> / {unit_label}\n"
+        f"💰 Tổng tiền đầu tư đợt này: <b>{format_decimal(quantity * buy_price)} đ</b>\n"
+        f"{extra_note}\n"
+        f"<i>Gõ <code>/portfolio</code> để xem danh mục tích lũy tổng thể.</i>"
     )
     
     await update.message.reply_text(msg, parse_mode='HTML')
+
+async def dca_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Alias chuyên biệt cho lệnh đầu tư định kỳ: /dca <MÃ> <TỔNG_TIỀN> <SỐ_CCQ> hoặc ngược lại"""
+    return await buy_command(update, context)
 
 async def sell_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """

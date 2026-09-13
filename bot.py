@@ -37,7 +37,7 @@ from modules.chart_generator import generate_technical_chart, generate_financial
 import database as db
 from modules.alert_handlers import alert_command
 from modules.alert_checker import check_alerts_job
-from modules.portfolio_handlers import buy_command, sell_command, portfolio_command
+from modules.portfolio_handlers import buy_command, sell_command, portfolio_command, dca_command
 from modules.screener_handlers import screen_command
 import modules.ai_assistant as ai_module
 
@@ -511,6 +511,7 @@ def main():
     app.add_handler(CommandHandler("macro", macro_command))
     app.add_handler(CommandHandler("alert", alert_command))
     app.add_handler(CommandHandler("buy", buy_command))
+    app.add_handler(CommandHandler("dca", dca_command))
     app.add_handler(CommandHandler("sell", sell_command))
     app.add_handler(CommandHandler("portfolio", portfolio_command))
     app.add_handler(CommandHandler("screen", screen_command))

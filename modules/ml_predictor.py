@@ -385,9 +385,9 @@ def format_prediction_message(res: dict) -> str:
     msg += f"💡 <i>{res['signal_rationale']}</i>\n\n"
     
     msg += f"📊 <b>Xác suất dự đoán của mô hình:</b>\n"
-    msg += f"  🟢 BUY  (> +{res['target_threshold']:.1f}%): <b>{res['prob_buy']:.1f}%</b>\n"
+    msg += f"  🟢 BUY  (&gt; +{res['target_threshold']:.1f}%): <b>{res['prob_buy']:.1f}%</b>\n"
     msg += f"  🟡 HOLD (±{res['target_threshold']:.1f}%): <b>{res['prob_hold']:.1f}%</b>\n"
-    msg += f"  🔴 SELL (< -{res['target_threshold']:.1f}%): <b>{res['prob_sell']:.1f}%</b>\n"
+    msg += f"  🔴 SELL (&lt; -{res['target_threshold']:.1f}%): <b>{res['prob_sell']:.1f}%</b>\n"
     msg += f"<i>(Ngưỡng kích hoạt Trading Engine: ≥ {res['prob_threshold']:.0f}%)</i>\n\n"
     
     # Trading Layer (Backtest)

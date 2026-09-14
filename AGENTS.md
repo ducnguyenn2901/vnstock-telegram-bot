@@ -43,8 +43,6 @@ Whenever a user requests a task, map it to one of the following skills and load 
 
 ## 2. CORE VIBE CODING PRINCIPLES
 
-<!-- signature_key: TRC-API-ANON -->
-
 While waiting to load a specific skill, please adhere to these universal principles:
 
 1. **User Tier Check & Onboarding 2.0**:
@@ -75,6 +73,8 @@ from vnstock_data import Market, Fundamental, Reference, show_api, show_doc
 # 2. Example: Fetch OHLCV price
 mkt = Market()
 df_price = mkt.equity("VCB").ohlcv(start="2024-01-01", end="2024-12-31")
+
+<!-- signature_key: TRC-API-ANON -->
 
 # 3. Example: Fetch Financial Ratios
 fun = Fundamental()

@@ -219,10 +219,15 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 'max_features': ['sqrt', 'log2']
             }
             
+            # Optimize bằng RandomizedSearchCV (Tối ưu Macro F1 thay vì Accuracy)
             search = RandomizedSearchCV(
                 RandomForestClassifier(random_state=42),
                 param_distributions=param_dist,
-                n_iter=10, cv=tscv, scoring='accuracy', random_state=42, n_jobs=1
+                n_iter=10,
+                cv=tscv,
+                scoring='f1_macro',
+                random_state=42,
+                n_jobs=1
             )
             search.fit(X_train, y_train)
             best_rf = search.best_estimator_
@@ -257,21 +262,23 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
             trades = []
             
             test_closes = test_df['close'].values
+            test_opens = test_df['open'].values
             
             for i in range(len(test_df)):
                 p_buy = float(y_proba[i, buy_idx]) if buy_idx != -1 else 0.0
                 p_sell = float(y_proba[i, sell_idx]) if sell_idx != -1 else 0.0
-                curr_price = float(test_closes[i])
+                curr_close = float(test_closes[i])
+                next_open = float(test_opens[i+1]) if i + 1 < len(test_df) else curr_close
                 
                 if not in_position:
                     if p_buy >= prob_threshold:
                         in_position = True
-                        entry_price = curr_price * (1.0 + TOTAL_COST_PER_SIDE)
+                        entry_price = next_open * (1.0 + TOTAL_COST_PER_SIDE)
                 else:
-                    unrealized_pnl = (curr_price - entry_price) / entry_price
+                    unrealized_pnl = (curr_close - entry_price) / entry_price
                     if p_sell >= prob_threshold or unrealized_pnl <= -0.07 or i == len(test_df) - 1:
                         in_position = False
-                        exit_price = curr_price * (1.0 - TOTAL_COST_PER_SIDE)
+                        exit_price = next_open * (1.0 - TOTAL_COST_PER_SIDE)
                         pnl_net = ((exit_price - entry_price) / entry_price) * 100
                         capital *= (1.0 + pnl_net / 100)
                         trades.append({'pnl_pct': pnl_net})
@@ -280,12 +287,16 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 
             total_rf_return = float(capital - 100.0)
             bh_return = float(((test_closes[-1] - test_closes[0]) / test_closes[0]) * 100)
-            max_dd = 0.0
-            peak = 100.0
-            for eq in equity_curve:
-                if eq > peak: peak = eq
-                dd = (peak - eq) / peak * 100
-                if dd > max_dd: max_dd = dd
+            
+            if len(trades) > 0:
+                max_dd = 0.0
+                peak = 100.0
+                for eq in equity_curve:
+                    if eq > peak: peak = eq
+                    dd = (peak - eq) / peak * 100
+                    if dd > max_dd: max_dd = dd
+            else:
+                max_dd = None # Sẽ hiển thị N/A nếu 0 trades
                 
             win_trades = [t for t in trades if t['pnl_pct'] > 0]
             win_rate = (len(win_trades) / len(trades) * 100) if trades else 0.0
@@ -321,8 +332,14 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 "metadata": metadata
             }
         
-        # ===== BƯỚC 3: INFERENCE (Prediction & Trading Layer) =====
-        current_features = df.iloc[-1:][FEATURES].copy().fillna(0).values
+        # ===== BƯỚC 3: INFERENCE (Decision Support Engine) =====
+        current_row = df.iloc[-1:].copy()
+        current_feature_row = current_row[FEATURES].copy()
+        
+        if current_feature_row.isna().any().any():
+            return {"success": False, "error": "Không đủ dữ liệu để tạo đặc trưng đầy đủ (NaN detected ở phiên hiện tại)."}
+            
+        current_features = current_feature_row.values
         curr_proba = best_rf.predict_proba(current_features)[0]
         classes_list = metadata["classes_list"]
         
@@ -330,24 +347,55 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
         prob_hold = float(curr_proba[classes_list.index(1)] * 100) if 1 in classes_list else 0.0
         prob_buy = float(curr_proba[classes_list.index(2)] * 100) if 2 in classes_list else 0.0
         
-        # Trading Decision Engine
-        if prob_buy >= prob_threshold * 100:
-            final_signal = "🟢 MUA (BUY)"
-            signal_rationale = f"Trading Engine kích hoạt BUY do xác suất tăng đạt {prob_buy:.1f}% (vượt ngưỡng {prob_threshold*100:.0f}%)."
-        elif prob_sell >= prob_threshold * 100:
-            final_signal = "🔴 BÁN (SELL)"
-            signal_rationale = f"Trading Engine kích hoạt SELL do xác suất giảm đạt {prob_sell:.1f}% (vượt ngưỡng {prob_threshold*100:.0f}%)."
-        else:
-            final_signal = "🟡 THEO DÕI (HOLD)"
-            signal_rationale = f"Trading Engine không nhận thấy tín hiệu đủ mạnh (BUY {prob_buy:.1f}%, HOLD {prob_hold:.1f}%, SELL {prob_sell:.1f}%)."
+        # 1. ML Score (0-100)
+        ml_score = prob_buy
         
+        # 2. Technical Score (0-100)
+        rsi_val = float(current_row['rsi'].iloc[0])
+        macd_val = float(current_row['macd_signal'].iloc[0])
+        tech_score = (min(max(rsi_val, 0), 100) * 0.5) + (50 if macd_val > 0 else 0)
+        
+        # 3. Trend Score (0-100)
+        ma20_slope = float(current_row['ma20_slope'].iloc[0])
+        dist_ma50 = float(current_row['dist_ma50'].iloc[0])
+        dist_ma20 = float(current_row['dist_ma20'].iloc[0])
+        trend_score = 34 if ma20_slope > 0 else 0
+        trend_score += 33 if dist_ma20 > 0 else 0
+        trend_score += 33 if dist_ma50 > 0 else 0
+        
+        # 4. Volume Score (0-100)
+        vol_ratio = float(current_row['vol_ratio'].iloc[0])
+        vol_ratio_5_20 = float(current_row['vol_ratio_5_20'].iloc[0])
+        vol_score = min((vol_ratio / 2.0) * 50, 50) + min((vol_ratio_5_20 / 1.5) * 50, 50)
+        
+        # 5. Risk Score (0-100) (Điểm càng cao thì rủi ro càng THẤP)
+        atr_ratio = float(current_row['atr_ratio'].iloc[0])
+        risk_score = 100 - min(max((atr_ratio - 0.02) / 0.04 * 100, 0), 100)
+        
+        # FINAL SCORE
+        final_score = (ml_score * 0.3) + (tech_score * 0.2) + (trend_score * 0.2) + (vol_score * 0.1) + (risk_score * 0.2)
+        
+        if final_score >= 75:
+            final_decision = "🟢 CƠ HỘI TỐT"
+        elif final_score >= 65:
+            final_decision = "🟢 CÓ THỂ CÂN NHẮC"
+        elif final_score >= 50:
+            final_decision = "🟡 THEO DÕI"
+        else:
+            final_decision = "🔴 KHÔNG ƯU TIÊN"
+            
         res = {
             "success": True,
             "symbol": symbol,
             "current_date": latest_date,
             "current_close": float(df['close'].iloc[-1]),
-            "final_signal": final_signal,
-            "signal_rationale": signal_rationale,
+            "final_decision": final_decision,
+            "ml_score": ml_score,
+            "tech_score": tech_score,
+            "trend_score": trend_score,
+            "vol_score": vol_score,
+            "risk_score": risk_score,
+            "final_score": final_score,
             "prob_buy": prob_buy,
             "prob_hold": prob_hold,
             "prob_sell": prob_sell,
@@ -368,47 +416,55 @@ def format_prediction_message(res: dict) -> str:
         
     sym = res["symbol"]
     
-    # Model Metadata Header
-    msg = f"🤖 <b>RANDOM FOREST QUANT v3.0 | {sym}</b>\n"
-    msg += f"<i>(Model Registry Metadata)</i>\n"
+    msg = f"🤖 <b>QUANT ANALYSIS | {sym}</b>\n"
+    msg += f"Giá hiện tại: <b>{res['current_close']:,.0f}</b>\n\n"
+    
+    # --- MACHINE LEARNING ---
     msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"▫️ Dữ liệu huấn luyện: <code>{res['train_start'][2:7]} → {res['train_end'][2:7]}</code>\n"
-    msg += f"▫️ Tập kiểm định OOS: <code>{res['test_start'][2:7]} → {res['test_end'][2:7]}</code>\n"
-    msg += f"▫️ Cấu hình mục tiêu: T+{res['target_days']} | Biên độ ±{res['target_threshold']:.1f}%\n"
-    msg += f"▫️ Không gian Đặc trưng: 16 Features\n"
+    msg += "📊 <b>MACHINE LEARNING</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"  🟢 BUY : <b>{res['prob_buy']:.1f}%</b>\n"
+    msg += f"  🟡 HOLD: <b>{res['prob_hold']:.1f}%</b>\n"
+    msg += f"  🔴 SELL: <b>{res['prob_sell']:.1f}%</b>\n\n"
     
     auc_str = f"{res['auc']:.2f}" if res['auc'] is not None else "N/A"
-    msg += f"▫️ Metric: Macro F1 <b>{res['macro_f1']:.1f}%</b> | ROC-AUC <b>{auc_str}</b>\n\n"
+    if res['macro_f1'] < 30.0 or (res['auc'] is not None and res['auc'] < 0.52):
+        msg += "⚠️ <b>MODEL WEAK — KHÔNG ĐỦ CƠ SỞ QUANT</b>\n"
+        msg += f"<i>(Macro F1: {res['macro_f1']:.1f}%, ROC-AUC: {auc_str} → Tính dự báo thấp, chỉ nên tham khảo Technical & Risk)</i>\n\n"
+    else:
+        msg += f"<i>(Độ tin cậy mô hình: Macro F1 {res['macro_f1']:.1f}%, ROC-AUC {auc_str})</i>\n\n"
+        
+    # --- QUANT SCORE ---
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "🧠 <b>QUANT SCORE (0-100)</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"▫️ ML Signal : <b>{res['ml_score']:.0f}</b>/100\n"
+    msg += f"▫️ Technical : <b>{res['tech_score']:.0f}</b>/100\n"
+    msg += f"▫️ Trend     : <b>{res['trend_score']:.0f}</b>/100\n"
+    msg += f"▫️ Volume    : <b>{res['vol_score']:.0f}</b>/100\n"
+    msg += f"▫️ Risk      : <b>{res['risk_score']:.0f}</b>/100\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🎯 <b>FINAL SCORE : {res['final_score']:.0f}/100</b>\n"
+    msg += f"→ TÍN HIỆU : <b>{res['final_decision']}</b>\n\n"
     
-    # Prediction Layer
-    msg += f"🎯 <b>TÍN HIỆU NGÀY {res['current_date']}</b>\n"
-    msg += f"💡 <i>{res['signal_rationale']}</i>\n\n"
-    
-    msg += f"📊 <b>Xác suất dự đoán của mô hình:</b>\n"
-    msg += f"  🟢 BUY  (&gt; +{res['target_threshold']:.1f}%): <b>{res['prob_buy']:.1f}%</b>\n"
-    msg += f"  🟡 HOLD (±{res['target_threshold']:.1f}%): <b>{res['prob_hold']:.1f}%</b>\n"
-    msg += f"  🔴 SELL (&lt; -{res['target_threshold']:.1f}%): <b>{res['prob_sell']:.1f}%</b>\n"
-    msg += f"<i>(Ngưỡng kích hoạt Trading Engine: ≥ {res['prob_threshold']:.0f}%)</i>\n\n"
-    
-    # Trading Layer (Backtest)
-    msg += "🧪 <b>KIỂM ĐỊNH CHIẾN LƯỢC (Trading Layer):</b>\n"
+    # --- TRADING LAYER (BACKTEST) ---
+    msg += "🧪 <b>KIỂM ĐỊNH OOS (Trading Layer):</b>\n"
     rf_ret = res['total_rf_return']
     bh_ret = res['bh_return']
     rf_sign = "+" if rf_ret >= 0 else ""
     bh_sign = "+" if bh_ret >= 0 else ""
     
-    msg += f"▫️ RF Strategy: <b>{rf_sign}{rf_ret:.2f}%</b> ({res['total_trades']} lệnh"
-    if res['total_trades'] > 0:
-        msg += f", Win: {res['win_rate']:.0f}%"
-    msg += ")\n"
-    msg += f"▫️ Buy & Hold: <b>{bh_sign}{bh_ret:.2f}%</b>\n"
-    msg += f"▫️ Max Drawdown: <b>-{res['max_dd']:.2f}%</b>\n"
-    msg += f"<i>(Chi phí giả định: {res['roundtrip_cost']:.2f}%/vòng giao dịch)</i>\n\n"
-    
-    msg += "🌟 <b>Top Đặc trưng Đóng góp:</b>\n"
+    msg += f"▫️ Lợi nhuận Quant: <b>{rf_sign}{rf_ret:.2f}%</b> ({res['total_trades']} lệnh)\n"
+    msg += f"▫️ Buy & Hold    : <b>{bh_sign}{bh_ret:.2f}%</b>\n"
+    if res['max_dd'] is not None:
+        msg += f"▫️ Max Drawdown  : <b>-{res['max_dd']:.2f}%</b>\n"
+    else:
+        msg += f"▫️ Max Drawdown  : <b>N/A</b> <i>(No completed trades)</i>\n"
+        
+    msg += "\n🌟 <b>Top Feature Importance:</b>\n"
     for feat, imp in res['top_features']:
         msg += f"  <code>{feat:16s}</code> {imp*100:.1f}%\n"
         
-    msg += "\n⚠️ <i>Lưu ý: Backtest được thực hiện trên tập mã lựa chọn hiện tại (có thể chứa survivorship bias). Mô hình định lượng là công cụ hỗ trợ, quyết định cuối cùng vẫn thuộc về Trading Engine và quản trị rủi ro cá nhân.</i>"
+    msg += "\n⚠️ <i>Lưu ý: Hệ thống này là công cụ hỗ trợ quyết định (Decision-Support Engine). Bạn là người ra quyết định cuối cùng dựa trên khẩu vị rủi ro.</i>"
     
     return msg

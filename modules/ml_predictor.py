@@ -117,7 +117,7 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
         raw_df = db.get_all_price_history(symbols=[symbol])
         
         # Nếu DB rỗng hoặc thiếu dữ liệu, tự động lấy trực tiếp từ API
-        if raw_df.empty or len(raw_df) < 80:
+        if raw_df.empty or len(raw_df) < 150:
             logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(raw_df)} phiên). Đang tự động tải từ Internet...")
             import datetime
             import os
@@ -134,7 +134,8 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 logger.warning(f"Lỗi vnstock khi tải {symbol}: {e}. Chuyển sang dùng Yahoo Finance...")
                 raw_df = pd.DataFrame()
                 
-            if raw_df is None or raw_df.empty or len(raw_df) < 80:
+            # vnstock bản Free bị giới hạn trả về tối đa 100 nến. Ta cần > 113 nến cho ML (ma50 + min_train 60 + target 3)
+            if raw_df is None or raw_df.empty or len(raw_df) < 120:
                 # KẾ HOẠCH B (DỰ PHÒNG): Dùng thư viện yfinance (Yahoo Finance)
                 try:
                     import yfinance as yf
@@ -150,7 +151,7 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 except Exception as yf_error:
                     logger.error(f"Lỗi Yahoo Finance: {yf_error}")
             
-            if raw_df is None or raw_df.empty or len(raw_df) < 80:
+            if raw_df is None or raw_df.empty or len(raw_df) < 120:
                 return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ (Không tải được từ cả vnstock và yfinance)."}
             
             # Chuẩn hóa tên cột

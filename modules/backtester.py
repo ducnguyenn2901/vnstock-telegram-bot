@@ -48,7 +48,7 @@ def run_backtest(symbol: str, strategy: str) -> dict:
     # 1. Lấy dữ liệu
     df = db.get_all_price_history(symbols=[symbol])
     
-    if df.empty or len(df) < 50:
+    if df.empty or len(df) < 150:
         logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(df)} phiên). Đang tự động tải từ Internet...")
         import datetime
         import os
@@ -65,7 +65,7 @@ def run_backtest(symbol: str, strategy: str) -> dict:
             logger.warning(f"Lỗi vnstock khi tải {symbol}: {e}. Chuyển sang dùng Yahoo Finance...")
             df = pd.DataFrame()
             
-        if df is None or df.empty or len(df) < 50:
+        if df is None or df.empty or len(df) < 120:
             try:
                 import yfinance as yf
                 yf_symbol = f"{symbol}.VN"
@@ -77,8 +77,8 @@ def run_backtest(symbol: str, strategy: str) -> dict:
             except Exception as yf_error:
                 logger.error(f"Lỗi Yahoo Finance: {yf_error}")
                 
-        if df is None or df.empty or len(df) < 50:
-            return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ."}
+        if df is None or df.empty or len(df) < 120:
+            return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ (Không đủ dữ liệu backtest)."}
             
         # Chuẩn hóa tên cột
         df.columns = [str(c).lower() for c in df.columns]

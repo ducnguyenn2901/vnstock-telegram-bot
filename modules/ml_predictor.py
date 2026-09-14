@@ -136,23 +136,29 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 
             # vnstock bản Free bị giới hạn trả về tối đa 100 nến. Ta cần > 113 nến cho ML (ma50 + min_train 60 + target 3)
             if raw_df is None or raw_df.empty or len(raw_df) < 120:
-                # KẾ HOẠCH B (DỰ PHÒNG): Dùng thư viện yfinance (Yahoo Finance)
+                # KẾ HOẠCH B (DỰ PHÒNG): Dùng API của DNSE (Rất ổn định cho Render/Server)
                 try:
-                    import yfinance as yf
-                    yf_symbol = f"{symbol}.VN" # Cổ phiếu Việt Nam trên Yahoo Finance có hậu tố .VN
-                    yf_data = yf.download(yf_symbol, start=start_date, end=end_date, progress=False)
+                    import requests
+                    start_ts = int(datetime.datetime.strptime(start_date, "%Y-%m-%d").timestamp())
+                    end_ts = int(datetime.datetime.strptime(end_date, "%Y-%m-%d").timestamp())
+                    url = f"https://services.entrade.com.vn/chart-api/v2/ohlcs/stock?resolution=1D&symbol={symbol}&from={start_ts}&to={end_ts}"
                     
-                    if not yf_data.empty:
-                        # Reset index để biến 'Date' thành cột
-                        raw_df = yf_data.reset_index()
-                        # Xử lý MultiIndex columns nếu yfinance trả về
-                        if isinstance(raw_df.columns, pd.MultiIndex):
-                            raw_df.columns = raw_df.columns.get_level_values(0)
-                except Exception as yf_error:
-                    logger.error(f"Lỗi Yahoo Finance: {yf_error}")
+                    r = requests.get(url, timeout=10)
+                    data = r.json()
+                    if 't' in data and len(data['t']) > 0:
+                        raw_df = pd.DataFrame({
+                            'date': pd.to_datetime(data['t'], unit='s'),
+                            'open': data['o'],
+                            'high': data['h'],
+                            'low': data['l'],
+                            'close': data['c'],
+                            'volume': data['v']
+                        })
+                except Exception as dnse_error:
+                    logger.error(f"Lỗi DNSE API: {dnse_error}")
             
             if raw_df is None or raw_df.empty or len(raw_df) < 120:
-                return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ (Không tải được từ cả vnstock và yfinance)."}
+                return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ (Không tải được từ vnstock và DNSE)."}
             
             # Chuẩn hóa tên cột
             raw_df.columns = [str(c).lower() for c in raw_df.columns]

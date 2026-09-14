@@ -67,15 +67,24 @@ def run_backtest(symbol: str, strategy: str) -> dict:
             
         if df is None or df.empty or len(df) < 120:
             try:
-                import yfinance as yf
-                yf_symbol = f"{symbol}.VN"
-                yf_data = yf.download(yf_symbol, start=start_date, end=end_date, progress=False)
-                if not yf_data.empty:
-                    df = yf_data.reset_index()
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.get_level_values(0)
-            except Exception as yf_error:
-                logger.error(f"Lỗi Yahoo Finance: {yf_error}")
+                import requests
+                start_ts = int(datetime.datetime.strptime(start_date, "%Y-%m-%d").timestamp())
+                end_ts = int(datetime.datetime.strptime(end_date, "%Y-%m-%d").timestamp())
+                url = f"https://services.entrade.com.vn/chart-api/v2/ohlcs/stock?resolution=1D&symbol={symbol}&from={start_ts}&to={end_ts}"
+                
+                r = requests.get(url, timeout=10)
+                data = r.json()
+                if 't' in data and len(data['t']) > 0:
+                    df = pd.DataFrame({
+                        'date': pd.to_datetime(data['t'], unit='s'),
+                        'open': data['o'],
+                        'high': data['h'],
+                        'low': data['l'],
+                        'close': data['c'],
+                        'volume': data['v']
+                    })
+            except Exception as dnse_error:
+                logger.error(f"Lỗi DNSE API: {dnse_error}")
                 
         if df is None or df.empty or len(df) < 120:
             return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ (Không đủ dữ liệu backtest)."}

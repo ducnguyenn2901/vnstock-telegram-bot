@@ -174,7 +174,7 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
         best_rf = None
         
         # Kiểm tra Model Registry Cache (chỉ train lại nếu có dữ liệu EOD mới)
-        cache_key = f"{symbol}_{target_days}_{threshold}"
+        cache_key = f"{symbol}_{target_days}_{threshold}_{prob_threshold}"
         if cache_key in MODEL_REGISTRY and MODEL_REGISTRY[cache_key]['latest_date'] == latest_date:
             best_rf = MODEL_REGISTRY[cache_key]['model']
             metadata = MODEL_REGISTRY[cache_key]['metadata']
@@ -196,9 +196,9 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
             if len(labeled_df) < 60:
                 return {"success": False, "error": "Dữ liệu sau tính toán không đủ 60 mẫu để huấn luyện."}
                 
-            # Chronological Split (80/20)
+            # Chronological Split (80/20) với Purge (Embargo)
             split_idx = int(len(labeled_df) * 0.8)
-            train_df = labeled_df.iloc[:split_idx]
+            train_df = labeled_df.iloc[:split_idx - target_days]
             test_df = labeled_df.iloc[split_idx:]
             
             X_train, y_train = train_df[FEATURES].values, train_df['target'].values
@@ -209,8 +209,12 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
             test_start = str(test_df['date'].iloc[0])[:10]
             test_end = str(test_df['date'].iloc[-1])[:10]
             
-            # Hyperparameter Tuning (TimeSeriesSplit)
-            tscv = TimeSeriesSplit(n_splits=5)
+            # Hyperparameter Tuning (Purged TimeSeriesSplit)
+            try:
+                tscv = TimeSeriesSplit(n_splits=5, gap=target_days)
+            except TypeError:
+                tscv = TimeSeriesSplit(n_splits=5)
+                
             param_dist = {
                 'n_estimators': [50, 100, 150],
                 'max_depth': [3, 5, 8],
@@ -219,7 +223,7 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 'max_features': ['sqrt', 'log2']
             }
             
-            # Optimize bằng RandomizedSearchCV (Tối ưu Macro F1 thay vì Accuracy)
+            # Optimize bằng RandomizedSearchCV
             search = RandomizedSearchCV(
                 RandomForestClassifier(random_state=42),
                 param_distributions=param_dist,
@@ -230,7 +234,15 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 n_jobs=1
             )
             search.fit(X_train, y_train)
-            best_rf = search.best_estimator_
+            best_estimator = search.best_estimator_
+            
+            # Probability Calibration
+            try:
+                from sklearn.calibration import CalibratedClassifierCV
+                best_rf = CalibratedClassifierCV(best_estimator, method='sigmoid', cv=tscv)
+                best_rf.fit(X_train, y_train)
+            except Exception:
+                best_rf = best_estimator
             
             # Metrics
             y_pred = best_rf.predict(X_test)
@@ -288,6 +300,9 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
             total_rf_return = float(capital - 100.0)
             bh_return = float(((test_closes[-1] - test_closes[0]) / test_closes[0]) * 100)
             
+            sharpe_ratio = None
+            profit_factor = None
+            
             if len(trades) > 0:
                 max_dd = 0.0
                 peak = 100.0
@@ -295,13 +310,22 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                     if eq > peak: peak = eq
                     dd = (peak - eq) / peak * 100
                     if dd > max_dd: max_dd = dd
+                    
+                import numpy as np
+                returns = pd.Series(equity_curve).pct_change().dropna()
+                if returns.std() != 0:
+                    sharpe_ratio = float((returns.mean() / returns.std()) * np.sqrt(252))
+                
+                gross_profit = sum(t['pnl_pct'] for t in trades if t['pnl_pct'] > 0)
+                gross_loss = abs(sum(t['pnl_pct'] for t in trades if t['pnl_pct'] < 0))
+                profit_factor = float(gross_profit / gross_loss) if gross_loss != 0 else float('inf')
             else:
                 max_dd = None # Sẽ hiển thị N/A nếu 0 trades
                 
             win_trades = [t for t in trades if t['pnl_pct'] > 0]
             win_rate = (len(win_trades) / len(trades) * 100) if trades else 0.0
             
-            importances = best_rf.feature_importances_
+            importances = best_estimator.feature_importances_
             top_features = sorted(zip(FEATURES, importances), key=lambda x: x[1], reverse=True)[:5]
             
             # --- LƯU VÀO MODEL REGISTRY ---
@@ -312,8 +336,8 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 "test_end": test_end,
                 "target_days": target_days,
                 "target_threshold": threshold * 100,
-                "rf_acc": rf_acc,
                 "baseline_acc": baseline_acc,
+                "rf_acc": rf_acc,
                 "macro_f1": macro_f1,
                 "auc": auc_val,
                 "total_trades": len(trades),
@@ -321,6 +345,8 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
                 "total_rf_return": total_rf_return,
                 "bh_return": bh_return,
                 "max_dd": max_dd,
+                "sharpe_ratio": sharpe_ratio,
+                "profit_factor": profit_factor,
                 "roundtrip_cost": (TOTAL_COST_PER_SIDE * 2) * 100,
                 "top_features": top_features,
                 "classes_list": classes_list
@@ -347,42 +373,54 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
         prob_hold = float(curr_proba[classes_list.index(1)] * 100) if 1 in classes_list else 0.0
         prob_buy = float(curr_proba[classes_list.index(2)] * 100) if 2 in classes_list else 0.0
         
-        # 1. ML Score (0-100)
-        ml_score = prob_buy
+        # --- QUANT DECISION ENGINE (v4.2) ---
+        expected_edge = (prob_buy / 100.0 * threshold * 100) - (prob_sell / 100.0 * threshold * 100)
         
-        # 2. Technical Score (0-100)
+        # Risk Indicators
+        atr_ratio = float(current_row['atr_ratio'].iloc[0])
+        if atr_ratio < 0.025: volatility = "🟢 LOW"
+        elif atr_ratio < 0.05: volatility = "🟡 MEDIUM"
+        else: volatility = "🔴 HIGH"
+        
+        vol_ratio = float(current_row['vol_ratio'].iloc[0])
+        if vol_ratio > 1.2: liquidity = "🟢 HIGH"
+        elif vol_ratio > 0.8: liquidity = "🟡 MEDIUM"
+        else: liquidity = "🔴 LOW"
+        
+        dist_ma50 = float(current_row['dist_ma50'].iloc[0])
+        if dist_ma50 > 0: market_regime = "🟢 BULL"
+        else: market_regime = "🔴 BEAR"
+        
+        # Alpha Confidence
         rsi_val = float(current_row['rsi'].iloc[0])
         macd_val = float(current_row['macd_signal'].iloc[0])
-        tech_score = (min(max(rsi_val, 0), 100) * 0.5) + (50 if macd_val > 0 else 0)
-        
-        # 3. Trend Score (0-100)
         ma20_slope = float(current_row['ma20_slope'].iloc[0])
-        dist_ma50 = float(current_row['dist_ma50'].iloc[0])
-        dist_ma20 = float(current_row['dist_ma20'].iloc[0])
-        trend_score = 34 if ma20_slope > 0 else 0
-        trend_score += 33 if dist_ma20 > 0 else 0
-        trend_score += 33 if dist_ma50 > 0 else 0
         
-        # 4. Volume Score (0-100)
-        vol_ratio = float(current_row['vol_ratio'].iloc[0])
-        vol_ratio_5_20 = float(current_row['vol_ratio_5_20'].iloc[0])
-        vol_score = min((vol_ratio / 2.0) * 50, 50) + min((vol_ratio_5_20 / 1.5) * 50, 50)
+        reasons = []
+        warnings = []
         
-        # 5. Risk Score (0-100) (Điểm càng cao thì rủi ro càng THẤP)
-        atr_ratio = float(current_row['atr_ratio'].iloc[0])
-        risk_score = 100 - min(max((atr_ratio - 0.02) / 0.04 * 100, 0), 100)
+        if prob_buy >= 60: reasons.append("✓ ML probability > threshold")
+        if ma20_slope > 0 and dist_ma50 > 0: reasons.append("✓ Trend bullish")
+        if vol_ratio > 1.0: reasons.append("✓ Volume confirms")
+        if volatility != "🔴 HIGH": reasons.append("✓ Risk acceptable")
         
-        # FINAL SCORE
-        final_score = (ml_score * 0.3) + (tech_score * 0.2) + (trend_score * 0.2) + (vol_score * 0.1) + (risk_score * 0.2)
+        if len(reasons) >= 3 and expected_edge > 0: confidence = "HIGH"
+        elif len(reasons) >= 1 and expected_edge > -0.5: confidence = "MEDIUM"
+        else: confidence = "LOW"
         
-        if final_score >= 75:
+        if len(labeled_df) < 200: warnings.append(f"⚠ Model trained on only {len(labeled_df)} observations")
+        if market_regime == "🔴 BEAR": warnings.append("⚠ Current regime is BEAR, reducing long success rate")
+        if metadata['macro_f1'] < 30.0: warnings.append("⚠ Model CV Macro F1 is very weak")
+        
+        # Final Decision Logic
+        if confidence == "LOW" or market_regime == "🔴 BEAR" or volatility == "🔴 HIGH" or prob_buy < prob_threshold * 100:
+            final_decision = "🔴 NO TRADE (CƠ SỞ YẾU)"
+        elif confidence == "HIGH" and prob_buy >= 65:
             final_decision = "🟢 CƠ HỘI TỐT"
-        elif final_score >= 65:
+        elif confidence == "MEDIUM" and prob_buy >= prob_threshold * 100:
             final_decision = "🟢 CÓ THỂ CÂN NHẮC"
-        elif final_score >= 50:
-            final_decision = "🟡 THEO DÕI"
         else:
-            final_decision = "🔴 KHÔNG ƯU TIÊN"
+            final_decision = "🟡 THEO DÕI"
             
         res = {
             "success": True,
@@ -390,12 +428,13 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
             "current_date": latest_date,
             "current_close": float(df['close'].iloc[-1]),
             "final_decision": final_decision,
-            "ml_score": ml_score,
-            "tech_score": tech_score,
-            "trend_score": trend_score,
-            "vol_score": vol_score,
-            "risk_score": risk_score,
-            "final_score": final_score,
+            "expected_edge": expected_edge,
+            "confidence": confidence,
+            "market_regime": market_regime,
+            "liquidity": liquidity,
+            "volatility": volatility,
+            "reasons": reasons,
+            "warnings": warnings,
             "prob_buy": prob_buy,
             "prob_hold": prob_hold,
             "prob_sell": prob_sell,
@@ -410,61 +449,61 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
 
 
 def format_prediction_message(res: dict) -> str:
-    """Định dạng báo cáo Quant ML với Model Metadata chuyên nghiệp."""
+    """Định dạng báo cáo Quant ML v4.2 chuyên nghiệp."""
     if not res.get("success"):
         return f"❌ <b>Lỗi Dự Báo AI Quant:</b> {res.get('error')}"
         
     sym = res["symbol"]
     
-    msg = f"🤖 <b>QUANT ANALYSIS | {sym}</b>\n"
+    msg = f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"<b>QUANT DECISION | {sym}</b>\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    
     msg += f"Giá hiện tại: <b>{res['current_close']:,.0f}</b>\n\n"
     
-    # --- MACHINE LEARNING ---
-    msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "📊 <b>MACHINE LEARNING</b>\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"  🟢 BUY : <b>{res['prob_buy']:.1f}%</b>\n"
-    msg += f"  🟡 HOLD: <b>{res['prob_hold']:.1f}%</b>\n"
-    msg += f"  🔴 SELL: <b>{res['prob_sell']:.1f}%</b>\n\n"
+    msg += f"P(UP T+{res['target_days']})       <b>{res['prob_buy']:.1f}%</b>\n"
+    msg += f"P(HOLD)         <b>{res['prob_hold']:.1f}%</b>\n"
+    msg += f"P(DOWN)         <b>{res['prob_sell']:.1f}%</b>\n\n"
     
-    auc_str = f"{res['auc']:.2f}" if res['auc'] is not None else "N/A"
-    if res['macro_f1'] < 30.0 or (res['auc'] is not None and res['auc'] < 0.52):
-        msg += "⚠️ <b>MODEL WEAK — KHÔNG ĐỦ CƠ SỞ QUANT</b>\n"
-        msg += f"<i>(Macro F1: {res['macro_f1']:.1f}%, ROC-AUC: {auc_str} → Tính dự báo thấp, chỉ nên tham khảo Technical & Risk)</i>\n\n"
-    else:
-        msg += f"<i>(Độ tin cậy mô hình: Macro F1 {res['macro_f1']:.1f}%, ROC-AUC {auc_str})</i>\n\n"
-        
-    # --- QUANT SCORE ---
-    msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    msg += "🧠 <b>QUANT SCORE (0-100)</b>\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"▫️ ML Signal : <b>{res['ml_score']:.0f}</b>/100\n"
-    msg += f"▫️ Technical : <b>{res['tech_score']:.0f}</b>/100\n"
-    msg += f"▫️ Trend     : <b>{res['trend_score']:.0f}</b>/100\n"
-    msg += f"▫️ Volume    : <b>{res['vol_score']:.0f}</b>/100\n"
-    msg += f"▫️ Risk      : <b>{res['risk_score']:.0f}</b>/100\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🎯 <b>FINAL SCORE : {res['final_score']:.0f}/100</b>\n"
-    msg += f"→ TÍN HIỆU : <b>{res['final_decision']}</b>\n\n"
+    edge_sign = "+" if res['expected_edge'] > 0 else ""
+    msg += f"Expected Edge   <b>{edge_sign}{res['expected_edge']:.2f}%</b>\n"
+    msg += f"Confidence      <b>{res['confidence']}</b>\n\n"
     
-    # --- TRADING LAYER (BACKTEST) ---
-    msg += "🧪 <b>KIỂM ĐỊNH OOS (Trading Layer):</b>\n"
+    msg += f"Market Regime   {res['market_regime']}\n"
+    msg += f"Liquidity       {res['liquidity']}\n"
+    msg += f"Volatility      {res['volatility']}\n\n"
+    
+    # --- OOS Performance ---
+    msg += "<b>OOS Performance</b>\n"
     rf_ret = res['total_rf_return']
-    bh_ret = res['bh_return']
     rf_sign = "+" if rf_ret >= 0 else ""
-    bh_sign = "+" if bh_ret >= 0 else ""
+    msg += f"Return          <b>{rf_sign}{rf_ret:.2f}%</b>\n"
     
-    msg += f"▫️ Lợi nhuận Quant: <b>{rf_sign}{rf_ret:.2f}%</b> ({res['total_trades']} lệnh)\n"
-    msg += f"▫️ Buy & Hold    : <b>{bh_sign}{bh_ret:.2f}%</b>\n"
+    sharpe = res.get('sharpe_ratio')
+    if sharpe is not None: msg += f"Sharpe           <b>{sharpe:.2f}</b>\n"
+    
     if res['max_dd'] is not None:
-        msg += f"▫️ Max Drawdown  : <b>-{res['max_dd']:.2f}%</b>\n"
-    else:
-        msg += f"▫️ Max Drawdown  : <b>N/A</b> <i>(No completed trades)</i>\n"
+        msg += f"Max DD          <b>-{res['max_dd']:.2f}%</b>\n"
+    msg += f"Win Rate         <b>{res['win_rate']:.0f}%</b>\n"
+    
+    pf = res.get('profit_factor')
+    if pf is not None and pf != float('inf'):
+        msg += f"Profit Factor    <b>{pf:.2f}</b>\n"
         
-    msg += "\n🌟 <b>Top Feature Importance:</b>\n"
-    for feat, imp in res['top_features']:
-        msg += f"  <code>{feat:16s}</code> {imp*100:.1f}%\n"
+    msg += f"\n<b>Decision</b>\n"
+    msg += f"{res['final_decision']}\n\n"
+    
+    if res['reasons']:
+        msg += "<b>Reason:</b>\n"
+        for r in res['reasons']:
+            msg += f"{r}\n"
+        msg += "\n"
         
-    msg += "\n⚠️ <i>Lưu ý: Hệ thống này là công cụ hỗ trợ quyết định (Decision-Support Engine). Bạn là người ra quyết định cuối cùng dựa trên khẩu vị rủi ro.</i>"
+    if res['warnings']:
+        msg += "<b>Warning:</b>\n"
+        for w in res['warnings']:
+            msg += f"{w}\n"
+            
+    msg += f"\n<i>(Benchmark: Raw B&H {res['bh_return']:.2f}% | Model F1: {res['macro_f1']:.1f}%)</i>"
     
     return msg

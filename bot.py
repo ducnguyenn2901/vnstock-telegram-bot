@@ -280,26 +280,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "ai":
         await query.message.reply_text("🤖 AI đang tổng hợp dữ liệu và phân tích. Vui lòng đợi trong giây lát...", parse_mode=ParseMode.HTML)
-        # Vì gọi AI có thể mất vài giây, nên đưa vào hàm gọi bất đồng bộ hoặc chạy thẳng
-        ai_response = ai_module.get_ai_evaluation(symbol)
+        ai_response = await asyncio.to_thread(ai_module.get_ai_evaluation, symbol)
         await query.message.reply_text(f"🤖 AI ĐÁNH GIÁ MÃ {symbol}\n\n{ai_response}")
         
     elif action == "shark":
         await query.message.reply_text(f"⏳ Đang dò quét dữ liệu khớp lệnh (tick-by-tick) của mã {symbol}...", parse_mode=ParseMode.HTML)
         from modules.smart_money import get_shark_trades, format_shark_message
-        df_sharks = get_shark_trades(symbol, min_value_vnd=5_000_000_000)
+        df_sharks = await asyncio.to_thread(get_shark_trades, symbol, min_value_vnd=5_000_000_000)
         msg = format_shark_message(symbol, df_sharks, min_value_vnd=5_000_000_000)
         await query.message.reply_text(msg, parse_mode=ParseMode.HTML)
         
     elif action == "predict":
-        await query.message.reply_text(f"🧠 Đang huấn luyện siêu mô hình Random Forest cho mã <b>{symbol}</b>. Quá trình này mất khoảng vài giây...", parse_mode=ParseMode.HTML)
+        await query.message.reply_text(f"🧠 Đang phân tích định lượng & huấn luyện Random Forest cho mã <b>{symbol}</b>...\n<i>(Quá trình chạy Time-Series CV & Backtest mất khoảng 3-5 giây)</i>", parse_mode=ParseMode.HTML)
         import modules.ml_predictor as ml
-        res = ml.train_and_predict(symbol, target_days=3)
+        res = await asyncio.to_thread(ml.train_and_predict, symbol, 3)
         msg = ml.format_prediction_message(res)
         await query.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     elif action == "ai_port":
-        # Tách user_id (dù thực ra current_user_id cũng được)
         port_uid = int(symbol)
         if query.from_user.id != port_uid:
             await query.answer("❌ Bạn không có quyền xem danh mục của người khác!", show_alert=True)
@@ -308,15 +306,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("🤖 AI đang đọc danh mục...")
         await query.message.reply_text("🤖 AI đang phân tích rủi ro và đánh giá danh mục của bạn. Vui lòng đợi trong giây lát...", parse_mode=ParseMode.HTML)
         
-        # Parse nội dung tin nhắn hiện tại làm string gửi cho AI
         portfolio_str = query.message.text
-        ai_response = ai_module.evaluate_portfolio(portfolio_str)
+        ai_response = await asyncio.to_thread(ai_module.evaluate_portfolio, portfolio_str)
         await query.message.reply_text(f"🤖 AI TƯ VẤN DANH MỤC\n\n{ai_response}")
 
 async def market_news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh gọi AI tóm tắt tin tức thị trường"""
     await update.message.reply_text("📰 Đang thu thập điểm báo và gửi cho AI phân tích. Vui lòng đợi...", parse_mode=ParseMode.HTML)
-    ai_response = ai_module.summarize_market_news()
+    ai_response = await asyncio.to_thread(ai_module.summarize_market_news)
     await update.message.reply_text(f"🌅 BẢN TIN SÁNG AI\n\n{ai_response}")
 
 async def shark_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -364,12 +361,8 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         import modules.ml_predictor as ml
         try:
             res = await asyncio.to_thread(ml.train_and_predict, symbol, 3)
-            if "error" in res:
-                await context.bot.send_message(chat_id=chat_id, text=f"❌ Mã cổ phiếu <b>{symbol}</b> không hợp lệ hoặc dữ liệu không đủ để huấn luyện.", parse_mode='HTML')
-            else:
-                msg = ml.format_prediction_message(res)
-                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                await context.bot.send_message(chat_id=chat_id, text=f"✅ <b>HOÀN TẤT:</b> Quá trình học máy mô hình cho {symbol} đã xong!", parse_mode='HTML')
+            msg = ml.format_prediction_message(res)
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
         except Exception as e:
             await context.bot.send_message(chat_id=chat_id, text=f"❌ Có lỗi trong quá trình học máy: {e}")
             
@@ -379,7 +372,7 @@ async def backtest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lệnh chạy Backtest lịch sử chiến lược (Chạy ngầm)"""
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("⚠️ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/backtest TCB breakout</code>\n(Chiến lược: breakout, squeeze, uptrend)", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("⚠️ <b>Cú pháp chưa đúng!</b>\nVí dụ: <code>/backtest TCB breakout</code>\n(Chiến lược: breakout, squeeze, uptrend, rf_signal)", parse_mode=ParseMode.HTML)
         return
         
     symbol = args[0].upper().strip()
@@ -425,8 +418,11 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Tự động nhận diện Mã cổ phiếu (3 chữ cái) hoặc ETF (bắt đầu bằng FUE, E1V)
     is_stock_or_etf = (len(text_upper) == 3 and text_upper.isalpha()) or text_upper.startswith("FUE") or text_upper.startswith("E1V")
-    # Tự động nhận diện Quỹ Mở (4-6 chữ cái)
-    is_open_fund = 4 <= len(text_upper) <= 6 and text_upper.isalpha() and not is_stock_or_etf
+    
+    is_open_fund = False
+    if 4 <= len(text_upper) <= 6 and text_upper.isalpha() and not is_stock_or_etf:
+        import modules.fund_data as fd
+        is_open_fund = await asyncio.to_thread(fd.is_fund_symbol, text_upper)
 
     if is_stock_or_etf:
         context.args = [text_upper]

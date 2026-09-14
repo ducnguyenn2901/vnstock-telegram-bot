@@ -153,8 +153,10 @@ def get_technical_analysis(symbol: str) -> dict:
             verdict = "🟢 MUA MẠNH"
         elif score in [1, 2]:
             verdict = "🌱 KHẢ QUAN / TÍCH LŨY"
+        elif score == 0:
+            verdict = "⚪ TRUNG LẬP / QUAN SÁT"
         elif score in [-1, -2]:
-            verdict = "🍂 THẬN TRỌNG / QUAN SÁT"
+            verdict = "🍂 THẬN TRỌNG / RỦI RO NHẸ"
         else:
             verdict = "🔴 BÁN / RỦI RO CAO"
             

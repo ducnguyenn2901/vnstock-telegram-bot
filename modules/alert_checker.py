@@ -43,8 +43,8 @@ async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 if is_mutual_fund:
                     fund_info = get_fund_info(symbol)
-                    if fund_info and fund_info.get('nav'):
-                        current_prices[symbol] = fund_info['nav']
+                    if fund_info and fund_info.get("success") and "info" in fund_info:
+                        current_prices[symbol] = fund_info["info"].get("nav", 0)
                 else:
                     eq = mkt.equity(symbol)
                     q = eq.quote()

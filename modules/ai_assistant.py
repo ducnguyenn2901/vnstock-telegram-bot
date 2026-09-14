@@ -48,7 +48,7 @@ def get_ai_evaluation(symbol: str) -> str:
         
         prompt += "Yêu cầu:\n1. Tóm tắt điểm tích cực và tiêu cực.\n2. Đưa ra nhận định xu hướng ngắn hạn và dài hạn.\n3. Kết luận: Có nên cân nhắc MUA, BÁN hay GIỮ không và rủi ro là gì.\nĐịnh dạng trả về: Sử dụng định dạng văn bản bình thường, có thể dùng emoji."
         
-        model = genai.GenerativeModel("gemini-3.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content(prompt)
         
         return response.text
@@ -67,7 +67,7 @@ def chat_with_ai(user_message: str, user_id: int = None) -> str:
         system_prompt = "Bạn là trợ lý AI chuyên về chứng khoán Việt Nam (Vnstock Telegram Bot). Nhiệm vụ của bạn là giải đáp thắc mắc về thị trường, cách đầu tư hoặc cung cấp thông tin chung cho người dùng bằng tiếng Việt, ngắn gọn, thân thiện và hữu ích. Nhớ xem lại lịch sử trò chuyện để hiểu bối cảnh và danh mục của người dùng nếu họ đề cập đến."
         
         model = genai.GenerativeModel(
-            "gemini-3.5-flash",
+            "gemini-2.0-flash",
             system_instruction=system_prompt
         )
         
@@ -116,7 +116,7 @@ def evaluate_portfolio(portfolio_str: str) -> str:
         prompt = f"Đây là danh mục hiện tại của tôi:\n\n{portfolio_str}\n\nHãy tư vấn giúp tôi!"
         
         model = genai.GenerativeModel(
-            "gemini-3.5-flash",
+            "gemini-2.0-flash",
             system_instruction=system_prompt
         )
         response = model.generate_content(prompt)
@@ -147,7 +147,7 @@ def summarize_market_news() -> str:
         system_prompt = "Bạn là Biên tập viên Tài chính kỳ cựu. Người dùng cung cấp tin tức từ các mã trụ cột của thị trường chứng khoán Việt Nam. Hãy đọc và viết một Bản Tin Sáng (khoảng 150-200 từ), bao gồm: Điểm nhấn thị trường, Xu hướng chung, và Lưu ý cho nhà đầu tư."
         
         model = genai.GenerativeModel(
-            "gemini-3.5-flash",
+            "gemini-2.0-flash",
             system_instruction=system_prompt
         )
         response = model.generate_content(f"Tin tức tổng hợp:\n{news_text}")

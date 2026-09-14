@@ -33,6 +33,11 @@ def get_fund_info(symbol: str) -> dict:
     info = matched.iloc[0].to_dict()
     return {"success": True, "info": info}
 
+def is_fund_symbol(symbol: str) -> bool:
+    """Kiểm tra nhanh xem mã có phải là quỹ mở không."""
+    res = get_fund_info(symbol)
+    return res.get("success", False)
+
 def format_fund_html(data: dict) -> str:
     """Format dữ liệu Quỹ mở thành HTML gửi Telegram"""
     if not data.get("success"):

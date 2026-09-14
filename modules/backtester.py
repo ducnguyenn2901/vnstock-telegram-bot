@@ -9,15 +9,41 @@ logger = logging.getLogger("Backtester")
 def run_backtest(symbol: str, strategy: str) -> dict:
     """
     Chạy mô phỏng giao dịch (Backtest) trên dữ liệu quá khứ.
-    - Mua: Dựa trên tín hiệu của strategy (breakout, squeeze, uptrend)
+    - Mua: Dựa trên tín hiệu của strategy (breakout, squeeze, uptrend, rf_signal)
     - Bán: Lỗ chạm -7%, giá đóng cửa thủng MA20, hoặc giữ quá 20 phiên.
+    - rf_signal: Sử dụng mô hình Random Forest Quant ML (gọi qua ml_predictor).
     """
     symbol = symbol.upper()
     strategy = strategy.lower()
-    valid_strategies = ['breakout', 'squeeze', 'uptrend']
+    valid_strategies = ['breakout', 'squeeze', 'uptrend', 'rf_signal']
     
     if strategy not in valid_strategies:
         return {"success": False, "error": f"Chiến lược không hợp lệ. Hãy chọn: {', '.join(valid_strategies)}"}
+
+    # Nếu chọn rf_signal, ủy thác hoàn toàn cho ml_predictor (đã tích hợp sẵn Backtest)
+    if strategy == 'rf_signal':
+        import modules.ml_predictor as ml
+        res = ml.train_and_predict(symbol, target_days=3)
+        if not res.get("success"):
+            return res
+        # Chuyển đổi kết quả ml_predictor sang format của backtester
+        return {
+            "success": True,
+            "symbol": symbol,
+            "strategy": "RF_SIGNAL (Random Forest Quant ML)",
+            "is_rf": True,
+            "total_trades": res.get("total_trades", 0),
+            "win_rate": res.get("win_rate", 0),
+            "avg_pnl": res.get("avg_pnl", 0),
+            "max_dd": res.get("max_dd", 0),
+            "total_rf_return": res.get("total_rf_return", 0),
+            "bh_return": res.get("bh_return", 0),
+            "roundtrip_cost": res.get("roundtrip_cost", 0),
+            "recent_trades": res.get("recent_trades", []),
+            "rf_acc": res.get("rf_acc", 0),
+            "baseline_acc": res.get("baseline_acc", 0),
+            "macro_f1": res.get("macro_f1", 0),
+        }
 
     # 1. Lấy dữ liệu
     df = db.get_all_price_history(symbols=[symbol])
@@ -150,6 +176,53 @@ def format_backtest_report(result: dict) -> str:
     if result.get("total_trades") == 0:
         return f"🧪 <b>BACKTEST: {result['symbol']} | {result['strategy']}</b>\n\nKhông có giao dịch nào được kích hoạt trong dữ liệu lịch sử hiện có."
 
+    # === Báo cáo riêng cho RF_SIGNAL ===
+    if result.get("is_rf"):
+        msg = f"🧪 <b>BACKTEST: {result['symbol']}</b>\n"
+        msg += f"⚙️ Chiến lược: <b>{result['strategy']}</b>\n"
+        msg += "<i>(Tín hiệu mua/bán dựa trên xác suất Random Forest ≥ 60%)</i>\n"
+        msg += "➖➖➖➖➖➖➖➖➖➖➖➖\n"
+        
+        msg += f"🔹 <b>Tổng số lệnh:</b> {result['total_trades']}\n"
+        wr = result['win_rate']
+        wr_icon = "🏆" if wr >= 50 else "⚠️"
+        msg += f"{wr_icon} <b>Win Rate:</b> {wr:.1f}%\n"
+        
+        avg = result.get('avg_pnl', 0)
+        avg_sign = "+" if avg > 0 else ""
+        msg += f"📈 <b>Lãi/Lỗ trung bình/lệnh:</b> {avg_sign}{avg:.2f}%\n"
+        msg += f"📉 <b>Max Drawdown:</b> -{result['max_dd']:.2f}%\n\n"
+        
+        # So sánh RF vs Buy & Hold (Mục 5.11)
+        rf_ret = result.get('total_rf_return', 0)
+        bh_ret = result.get('bh_return', 0)
+        rf_sign = "+" if rf_ret >= 0 else ""
+        bh_sign = "+" if bh_ret >= 0 else ""
+        
+        msg += "📊 <b>SO SÁNH VỚI BUY & HOLD:</b>\n"
+        msg += f"▫️ RF Strategy: <b>{rf_sign}{rf_ret:.2f}%</b>\n"
+        msg += f"▫️ Buy & Hold:  <b>{bh_sign}{bh_ret:.2f}%</b>\n"
+        
+        diff = rf_ret - bh_ret
+        diff_sign = "+" if diff >= 0 else ""
+        diff_icon = "✅" if diff >= 0 else "❌"
+        msg += f"▫️ Alpha: {diff_icon} <b>{diff_sign}{diff:.2f}%</b>\n\n"
+        
+        msg += f"🔬 <b>Độ chính xác mô hình:</b> {result.get('rf_acc', 0):.1f}% (Baseline: {result.get('baseline_acc', 0):.1f}%)\n"
+        msg += f"📐 <b>Macro F1:</b> {result.get('macro_f1', 0):.1f}%\n"
+        msg += f"💰 <i>Chi phí giả định: {result.get('roundtrip_cost', 0.5):.2f}%/vòng (Phí + Slippage)</i>\n"
+        
+        # 3 lệnh gần nhất
+        if result.get('recent_trades'):
+            msg += "\n🗓 <b>Lệnh gần nhất:</b>\n"
+            for t in result['recent_trades']:
+                sign = "🟢" if t['pnl_pct'] > 0 else "🔴"
+                msg += f"  {sign} {t['buy_date']} → {t['sell_date']}: <b>{t['pnl_pct']:+.2f}%</b>\n"
+        
+        msg += "\n⚠️ <i>Lưu ý: Đây là kết quả mô phỏng trên dữ liệu lịch sử (out-of-sample). Hiệu quả quá khứ không đảm bảo kết quả tương lai.</i>"
+        return msg
+
+    # === Báo cáo cho chiến lược TA cũ (breakout/squeeze/uptrend) ===
     msg = f"🧪 <b>BACKTEST: {result['symbol']}</b>\n"
     msg += f"⚙️ Chiến lược: <b>{result['strategy']}</b>\n"
     msg += "<i>(Quy tắc bán: Lỗ -7%, thủng MA20, hoặc giữ 20 phiên)</i>\n"
@@ -157,12 +230,10 @@ def format_backtest_report(result: dict) -> str:
     
     msg += f"🔹 <b>Tổng số lệnh:</b> {result['total_trades']}\n"
     
-    # Màu sắc Win Rate
     wr = result['win_rate']
     wr_icon = "🏆" if wr >= 50 else "⚠️"
     msg += f"{wr_icon} <b>Tỷ lệ Thắng (Win Rate):</b> {wr:.1f}%\n"
     
-    # Lãi lỗ trung bình
     avg = result['avg_pnl']
     avg_sign = "+" if avg > 0 else ""
     msg += f"📈 <b>Lãi/Lỗ trung bình/lệnh:</b> {avg_sign}{avg:.2f}%\n"
@@ -182,3 +253,4 @@ def format_backtest_report(result: dict) -> str:
     msg += "\n⚠️ <i>Lưu ý: Bạn cần chạy lệnh /sync thường xuyên để có đủ dữ liệu lịch sử chuẩn xác nhất cho module Backtest.</i>"
     
     return msg
+

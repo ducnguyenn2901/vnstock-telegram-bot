@@ -47,8 +47,23 @@ def run_backtest(symbol: str, strategy: str) -> dict:
 
     # 1. Lấy dữ liệu
     df = db.get_all_price_history(symbols=[symbol])
+    
     if df.empty or len(df) < 50:
-        return {"success": False, "error": f"Không đủ dữ liệu lịch sử cho {symbol}. Cần chạy /sync trước."}
+        logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(df)} phiên). Đang tự động tải từ vnstock...")
+        import vnstock
+        import datetime
+        mkt = vnstock.Market()
+        end_date = datetime.date.today().strftime("%Y-%m-%d")
+        start_date = (datetime.date.today() - datetime.timedelta(days=365 * 4)).strftime("%Y-%m-%d")
+        
+        df = mkt.equity(symbol).ohlcv(start=start_date, end=end_date)
+        if df is None or df.empty or len(df) < 50:
+            return {"success": False, "error": f"Không đủ dữ liệu lịch sử cho {symbol} (cần tối thiểu 50 phiên)."}
+            
+        # Chuẩn hóa tên cột
+        df.columns = [c.lower() for c in df.columns]
+        if 'time' in df.columns:
+            df.rename(columns={'time': 'date'}, inplace=True)
 
     # Đảm bảo sắp xếp đúng theo thời gian
     df = df.sort_values('date').reset_index(drop=True)

@@ -115,9 +115,25 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
     try:
         # ===== BƯỚC 1: DỮ LIỆU & CACHE =====
         raw_df = db.get_all_price_history(symbols=[symbol])
+        
+        # Nếu DB rỗng hoặc thiếu dữ liệu, tự động lấy trực tiếp từ vnstock (4 năm)
         if raw_df.empty or len(raw_df) < 80:
-            return {"success": False, "error": f"Dữ liệu lịch sử cho {symbol} chưa đủ (tối thiểu 80 phiên)."}
+            logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(raw_df)} phiên). Đang tự động tải từ vnstock...")
+            import vnstock
+            import datetime
+            mkt = vnstock.Market()
+            end_date = datetime.date.today().strftime("%Y-%m-%d")
+            start_date = (datetime.date.today() - datetime.timedelta(days=365 * 4)).strftime("%Y-%m-%d")
             
+            raw_df = mkt.equity(symbol).ohlcv(start=start_date, end=end_date)
+            if raw_df is None or raw_df.empty or len(raw_df) < 80:
+                return {"success": False, "error": f"Mã {symbol} không hợp lệ hoặc dữ liệu lịch sử trên sàn quá ngắn (chưa đủ 80 phiên)."}
+            
+            # Chuẩn hóa tên cột
+            raw_df.columns = [c.lower() for c in raw_df.columns]
+            if 'time' in raw_df.columns:
+                raw_df.rename(columns={'time': 'date'}, inplace=True)
+                
         raw_df = raw_df.sort_values('date').reset_index(drop=True)
         latest_date = str(raw_df['date'].iloc[-1])[:10]
         

@@ -49,21 +49,43 @@ def run_backtest(symbol: str, strategy: str) -> dict:
     df = db.get_all_price_history(symbols=[symbol])
     
     if df.empty or len(df) < 50:
-        logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(df)} phiên). Đang tự động tải từ vnstock...")
-        import vnstock
+        logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(df)} phiên). Đang tự động tải từ Internet...")
         import datetime
-        mkt = vnstock.Market()
+        import os
+        os.environ["VNSTOCK_TELEMETRY"] = "off"
+        
         end_date = datetime.date.today().strftime("%Y-%m-%d")
         start_date = (datetime.date.today() - datetime.timedelta(days=365 * 4)).strftime("%Y-%m-%d")
         
-        df = mkt.equity(symbol).ohlcv(start=start_date, end=end_date)
+        try:
+            import vnstock
+            mkt = vnstock.Market()
+            df = mkt.equity(symbol).ohlcv(start=start_date, end=end_date)
+        except Exception as e:
+            logger.warning(f"Lỗi vnstock khi tải {symbol}: {e}. Chuyển sang dùng Yahoo Finance...")
+            df = pd.DataFrame()
+            
         if df is None or df.empty or len(df) < 50:
-            return {"success": False, "error": f"Không đủ dữ liệu lịch sử cho {symbol} (cần tối thiểu 50 phiên)."}
+            try:
+                import yfinance as yf
+                yf_symbol = f"{symbol}.VN"
+                yf_data = yf.download(yf_symbol, start=start_date, end=end_date, progress=False)
+                if not yf_data.empty:
+                    df = yf_data.reset_index()
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+            except Exception as yf_error:
+                logger.error(f"Lỗi Yahoo Finance: {yf_error}")
+                
+        if df is None or df.empty or len(df) < 50:
+            return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ."}
             
         # Chuẩn hóa tên cột
-        df.columns = [c.lower() for c in df.columns]
+        df.columns = [str(c).lower() for c in df.columns]
         if 'time' in df.columns:
             df.rename(columns={'time': 'date'}, inplace=True)
+        elif 'date' not in df.columns and 'datetime' in df.columns:
+            df.rename(columns={'datetime': 'date'}, inplace=True)
 
     # Đảm bảo sắp xếp đúng theo thời gian
     df = df.sort_values('date').reset_index(drop=True)

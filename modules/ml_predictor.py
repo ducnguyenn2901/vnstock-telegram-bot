@@ -116,23 +116,49 @@ def train_and_predict(symbol: str, target_days: int = 3, threshold: float = 0.01
         # ===== BƯỚC 1: DỮ LIỆU & CACHE =====
         raw_df = db.get_all_price_history(symbols=[symbol])
         
-        # Nếu DB rỗng hoặc thiếu dữ liệu, tự động lấy trực tiếp từ vnstock (4 năm)
+        # Nếu DB rỗng hoặc thiếu dữ liệu, tự động lấy trực tiếp từ API
         if raw_df.empty or len(raw_df) < 80:
-            logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(raw_df)} phiên). Đang tự động tải từ vnstock...")
-            import vnstock
+            logger.info(f"Dữ liệu DB cho {symbol} chưa đủ ({len(raw_df)} phiên). Đang tự động tải từ Internet...")
             import datetime
-            mkt = vnstock.Market()
+            import os
+            os.environ["VNSTOCK_TELEMETRY"] = "off" # Tắt cảnh báo telemetry của vnstock
+            
             end_date = datetime.date.today().strftime("%Y-%m-%d")
             start_date = (datetime.date.today() - datetime.timedelta(days=365 * 4)).strftime("%Y-%m-%d")
             
-            raw_df = mkt.equity(symbol).ohlcv(start=start_date, end=end_date)
+            try:
+                import vnstock
+                mkt = vnstock.Market()
+                raw_df = mkt.equity(symbol).ohlcv(start=start_date, end=end_date)
+            except Exception as e:
+                logger.warning(f"Lỗi vnstock khi tải {symbol}: {e}. Chuyển sang dùng Yahoo Finance...")
+                raw_df = pd.DataFrame()
+                
             if raw_df is None or raw_df.empty or len(raw_df) < 80:
-                return {"success": False, "error": f"Mã {symbol} không hợp lệ hoặc dữ liệu lịch sử trên sàn quá ngắn (chưa đủ 80 phiên)."}
+                # KẾ HOẠCH B (DỰ PHÒNG): Dùng thư viện yfinance (Yahoo Finance)
+                try:
+                    import yfinance as yf
+                    yf_symbol = f"{symbol}.VN" # Cổ phiếu Việt Nam trên Yahoo Finance có hậu tố .VN
+                    yf_data = yf.download(yf_symbol, start=start_date, end=end_date, progress=False)
+                    
+                    if not yf_data.empty:
+                        # Reset index để biến 'Date' thành cột
+                        raw_df = yf_data.reset_index()
+                        # Xử lý MultiIndex columns nếu yfinance trả về
+                        if isinstance(raw_df.columns, pd.MultiIndex):
+                            raw_df.columns = raw_df.columns.get_level_values(0)
+                except Exception as yf_error:
+                    logger.error(f"Lỗi Yahoo Finance: {yf_error}")
+            
+            if raw_df is None or raw_df.empty or len(raw_df) < 80:
+                return {"success": False, "error": f"API lỗi hoặc mã {symbol} không hợp lệ (Không tải được từ cả vnstock và yfinance)."}
             
             # Chuẩn hóa tên cột
-            raw_df.columns = [c.lower() for c in raw_df.columns]
+            raw_df.columns = [str(c).lower() for c in raw_df.columns]
             if 'time' in raw_df.columns:
                 raw_df.rename(columns={'time': 'date'}, inplace=True)
+            elif 'date' not in raw_df.columns and 'datetime' in raw_df.columns:
+                raw_df.rename(columns={'datetime': 'date'}, inplace=True)
                 
         raw_df = raw_df.sort_values('date').reset_index(drop=True)
         latest_date = str(raw_df['date'].iloc[-1])[:10]

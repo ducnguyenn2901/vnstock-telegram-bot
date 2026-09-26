@@ -10,6 +10,8 @@ import pandas as pd
 # Giả định chạy trong môi trường cùng cấp với các modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from modules.ml_predictor import train_and_predict
+from modules.market_data import get_market_quote
 from modules.paper_trading_logger import (
     log_signal_t0, update_entry_t1, update_actual_t3, 
     check_t0_exists, get_pending_t1, get_pending_t3

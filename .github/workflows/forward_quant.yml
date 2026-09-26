@@ -1,6 +1,10 @@
 name: VNStock Quant Forward Runner
 
 on:
+  push:
+    branches:
+      - main
+      - master
   schedule:
     # Lịch chạy theo Giờ UTC (Bằng giờ Việt Nam trừ đi 7 tiếng)
     # Chạy T2 đến T6 (1-5)

@@ -40,7 +40,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install vnstock pandas scikit-learn supabase python-dotenv
+          pip install --extra-index-url https://vnstocks.com/api/simple vnstock vnai
+          pip install pandas scikit-learn supabase python-dotenv
 
       - name: Determine Task from Cron
         id: task_selector

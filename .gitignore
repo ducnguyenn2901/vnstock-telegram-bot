@@ -1,28 +1,19 @@
-# Môi trường ảo
+# Môi trường ảo Python
 .venv/
-env/
 venv/
-ENV/
-
-# Cấu hình bảo mật & CSDL nội bộ
-.env
-*.db
-bot_database.db
-
-# Cache & file tạm của Python
+env/
 __pycache__/
-*.py[cod]
-*$py.class
 *.pyc
 
-# Thư mục biểu đồ sinh ra
-charts/
-*.png
-*.jpg
-*.jpeg
+# Dữ liệu cục bộ (Không đẩy lên mây)
+data/*.db
+data/*.sqlite3
 
-# IDE & OS
-.vscode/
+# Log
+logs/
+*.log
+
+# Cấu hình cá nhân
+.env
 .idea/
-.DS_Store
-Thumbs.db
+.vscode/

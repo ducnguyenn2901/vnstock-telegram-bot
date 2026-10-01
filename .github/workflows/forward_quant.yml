@@ -48,17 +48,18 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "TASK=${{ github.event.inputs.task }}" >> $GITHUB_ENV
-          else
-            HOUR=$(date -u +"%H")
-            if [ "$HOUR" == "02" ] || [ "$HOUR" == "2" ]; then
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            if [[ "${{ github.event.schedule }}" == "15 2 * * 1-5" ]]; then
               echo "TASK=t1" >> $GITHUB_ENV
-            elif [ "$HOUR" == "08" ] || [ "$HOUR" == "8" ]; then
+            elif [[ "${{ github.event.schedule }}" == "0 8 * * 1-5" ]]; then
               echo "TASK=t3" >> $GITHUB_ENV
-            elif [ "$HOUR" == "09" ] || [ "$HOUR" == "9" ]; then
+            elif [[ "${{ github.event.schedule }}" == "0 9 * * 1-5" ]]; then
               echo "TASK=t0" >> $GITHUB_ENV
             else
-              echo "TASK=t0" >> $GITHUB_ENV # fallback
+              echo "TASK=t0" >> $GITHUB_ENV
             fi
+          else
+            echo "TASK=t0" >> $GITHUB_ENV # fallback cho sự kiện push
           fi
 
       - name: Run Daily Forward Worker

@@ -4,6 +4,7 @@ import argparse
 import logging
 import sqlite3
 import traceback
+import time
 from datetime import datetime
 import pandas as pd
 
@@ -31,7 +32,11 @@ console = logging.StreamHandler()
 console.setLevel(logging.INFO)
 logging.getLogger('').addHandler(console)
 
-VN30_UNIVERSE = ["FPT", "MBB", "HPG", "MWG", "VCB", "SSI", "STB", "TCB", "PNJ", "VHM"]
+VN30_UNIVERSE = [
+    "ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG", 
+    "MBB", "MSN", "MWG", "PLX", "POW", "SAB", "SHB", "SSB", "SSI", "STB", 
+    "TCB", "TPB", "VCB", "VHM", "VIB", "VIC", "VJC", "VNM", "VPB", "VRE"
+]
 
 def run_t0(dry_run=False):
     logging.info(f"🚀 BẮT ĐẦU CHU TRÌNH T0 (AI PREDICTION) - DRY RUN: {dry_run}")
@@ -79,6 +84,8 @@ def run_t0(dry_run=False):
         except Exception as e:
             logging.error(f"❌ [T0] {sym}: Lỗi hệ thống bất ngờ - {e}")
             
+        time.sleep(2)  # Nghỉ 2 giây để tránh Rate Limit API của Vnstock
+            
     logging.info(f"🏁 KẾT THÚC T0: {success_count}/{len(VN30_UNIVERSE)} thành công.")
 
 def run_t1(dry_run=False):
@@ -106,6 +113,8 @@ def run_t1(dry_run=False):
                 logging.warning(f"⚠️ [T1] {sym}: Lỗi lấy quote - {quote_res.get('error')}")
         except Exception as e:
             logging.error(f"❌ [T1] {sym}: Lỗi hệ thống - {e}")
+            
+        time.sleep(2)  # Nghỉ 2s tránh Rate Limit
 
 def run_t3(dry_run=False):
     logging.info(f"🚀 BẮT ĐẦU CHU TRÌNH T3 (ACTUAL RETURN AUDIT) - DRY RUN: {dry_run}")
@@ -138,6 +147,8 @@ def run_t3(dry_run=False):
                 logging.info(f"⏳ [T3] {sym}: Chưa tới T3. Hiện tại mới là T+{tdays}.")
         except Exception as e:
             logging.error(f"❌ [T3] {sym}: Lỗi hệ thống - {e}")
+            
+        time.sleep(2)  # Nghỉ 2s tránh Rate Limit
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="VNSTOCK QUANT Forward Paper Trading Runner")

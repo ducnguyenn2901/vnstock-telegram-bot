@@ -43,6 +43,8 @@ def run_t0(dry_run=False):
     today_str = datetime.now().strftime("%Y-%m-%d")
     
     success_count = 0
+    buy_signals = []
+    
     for sym in VN30_UNIVERSE:
         try:
             if check_t0_exists(sym, today_str):
@@ -77,6 +79,10 @@ def run_t0(dry_run=False):
                     logging.info(f"✅ [T0] {sym}: Đã lưu tín hiệu {sig_id}")
                 else:
                     logging.info(f"✅ [T0] {sym}: [DRY-RUN] Dự báo thành công P(BUY)={res['prob_buy']:.1f}%")
+                
+                if res.get('suggested_position', 0) > 0:
+                    buy_signals.append(f"🟢 MUA {sym}: Xác suất {res['prob_buy']*100:.1f}% | Rủi ro {res.get('position_risk',0)*100:.1f}% | {res.get('suggested_position',0)*100:.0f}% Vốn")
+                
                 success_count += 1
             else:
                 logging.error(f"❌ [T0] {sym}: AI Lỗi - {res.get('error')}")
@@ -87,6 +93,8 @@ def run_t0(dry_run=False):
         time.sleep(2)  # Nghỉ 2 giây để tránh Rate Limit API của Vnstock
             
     logging.info(f"🏁 KẾT THÚC T0: {success_count}/{len(VN30_UNIVERSE)} thành công.")
+    return buy_signals
+
 
 def run_t1(dry_run=False):
     logging.info(f"🚀 BẮT ĐẦU CHU TRÌNH T1 (OPEN PRICE EXECUTION) - DRY RUN: {dry_run}")
@@ -94,8 +102,9 @@ def run_t1(dry_run=False):
     
     if not pending_signals:
         logging.info("T1: Không có lệnh chờ.")
-        return
+        return []
         
+    executed = []
     for sig_id, sym in pending_signals:
         try:
             quote_res = get_market_quote(sym)
@@ -107,6 +116,8 @@ def run_t1(dry_run=False):
                         logging.info(f"✅ [T1] {sym}: Đã khớp lệnh ảo giá mở cửa {open_p} (Sig: {sig_id})")
                     else:
                         logging.info(f"✅ [T1] {sym}: [DRY-RUN] Sẽ khớp lệnh ảo giá mở cửa {open_p}")
+                    
+                    executed.append(f"🟢 {sym}: Khớp T1 giá {open_p:,.0f}đ")
                 else:
                     logging.warning(f"⚠️ [T1] {sym}: Giá mở cửa chưa hợp lệ (Market chưa mở?). Bỏ qua.")
             else:
@@ -115,14 +126,20 @@ def run_t1(dry_run=False):
             logging.error(f"❌ [T1] {sym}: Lỗi hệ thống - {e}")
             
         time.sleep(2)  # Nghỉ 2s tránh Rate Limit
+        
+    return executed
 
 def run_t3(dry_run=False):
     logging.info(f"🚀 BẮT ĐẦU CHU TRÌNH T3 (ACTUAL RETURN AUDIT) - DRY RUN: {dry_run}")
     today_str = datetime.now().strftime("%Y-%m-%d")
     
     entered_signals = get_pending_t3()
-    
+    if not entered_signals:
+        return []
+        
     mkt = vnstock.Market()
+    closed = []
+    
     for sig_id, sym, date_str in entered_signals:
         try:
             eq = mkt.equity(sym)
@@ -138,6 +155,8 @@ def run_t3(dry_run=False):
                             logging.info(f"✅ [T3] {sym}: Đã chốt vị thế T+3 giá {close_p}. Trạng thái COMPLETED. (Sig: {sig_id})")
                         else:
                             logging.info(f"✅ [T3] {sym}: [DRY-RUN] Tới hạn T3. Giá chốt ảo {close_p}.")
+                        
+                        closed.append(f"🔴 {sym}: Đóng T3 giá {close_p:,.0f}đ")
                     else:
                         logging.warning(f"⚠️ [T3] {sym}: Giá đóng cửa chưa hợp lệ.")
                 else:
@@ -149,6 +168,8 @@ def run_t3(dry_run=False):
             logging.error(f"❌ [T3] {sym}: Lỗi hệ thống - {e}")
             
         time.sleep(2)  # Nghỉ 2s tránh Rate Limit
+        
+    return closed
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="VNSTOCK QUANT Forward Paper Trading Runner")

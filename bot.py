@@ -487,6 +487,41 @@ def start_health_check_server():
         print(f"⚠️ Không thể mở port web: {e}")
 
 from modules.intraday_scanner import run_scanner_job, scanner_command
+from daily_forward_runner import run_t0, run_t1, run_t3
+
+async def quant_t1_job(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = config.ADMIN_CHAT_ID
+    if not chat_id: return
+    try:
+        results = await asyncio.to_thread(run_t1, False)
+        if results:
+            await context.bot.send_message(chat_id=chat_id, text="🚀 <b>QUANT T1 - Khớp Lệnh Sáng:</b>\n" + "\n".join(results), parse_mode="HTML")
+    except Exception as e:
+        await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi T1: {e}")
+
+async def quant_t3_job(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = config.ADMIN_CHAT_ID
+    if not chat_id: return
+    try:
+        results = await asyncio.to_thread(run_t3, False)
+        if results:
+            await context.bot.send_message(chat_id=chat_id, text="🚀 <b>QUANT T3 - Chốt Lệnh Chiều:</b>\n" + "\n".join(results), parse_mode="HTML")
+    except Exception as e:
+        await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi T3: {e}")
+
+async def quant_t0_job(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = config.ADMIN_CHAT_ID
+    if not chat_id: return
+    await context.bot.send_message(chat_id=chat_id, text="🧠 <i>[QUANT] Đang chạy AI dự báo rổ VN30 (Dự kiến mất 4-5 phút)...</i>", parse_mode="HTML")
+    try:
+        buy_signals = await asyncio.to_thread(run_t0, False)
+        if buy_signals:
+            msg = "🚨 <b>TÍN HIỆU MUA T0 TỪ AI:</b>\n\n" + "\n".join(buy_signals)
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="✅ <b>Xong T0:</b> Hôm nay AI không tìm thấy mã nào đủ chuẩn an toàn để mua.", parse_mode="HTML")
+    except Exception as e:
+        await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi T0: {e}")
 
 def main():
     """Điểm khởi chạy ứng dụng Telegram Bot."""
@@ -538,6 +573,17 @@ def main():
         sync_time = datetime.time(hour=15, minute=20, tzinfo=vn_tz)
         app.job_queue.run_daily(sync_all_stocks_data, time=sync_time, days=(1, 2, 3, 4, 5))
         print("⏰ Đã thiết lập Cron Job đồng bộ dữ liệu lúc 15:20 tự động (T2-T6).")
+        
+        # 4. Live Quant System
+        quant_t1_time = datetime.time(hour=9, minute=15, tzinfo=vn_tz)
+        app.job_queue.run_daily(quant_t1_job, time=quant_t1_time, days=(1, 2, 3, 4, 5))
+        
+        quant_t3_time = datetime.time(hour=15, minute=0, tzinfo=vn_tz)
+        app.job_queue.run_daily(quant_t3_job, time=quant_t3_time, days=(1, 2, 3, 4, 5))
+        
+        quant_t0_time = datetime.time(hour=16, minute=0, tzinfo=vn_tz)
+        app.job_queue.run_daily(quant_t0_job, time=quant_t0_time, days=(1, 2, 3, 4, 5))
+        print("⏰ Đã thiết lập Live Quant System (T1 09:15, T3 15:00, T0 16:00) báo cáo trực tiếp về Telegram.")
         
     print("✅ Bot đang hoạt động! Nhấn Ctrl+C để dừng bot.")
     app.run_polling()

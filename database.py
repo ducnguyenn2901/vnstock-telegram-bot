@@ -11,7 +11,7 @@ DB_PATH = os.path.join(BASE_DIR, "bot_database.db")
 
 # 1. Thiết lập Động cơ kết nối (Engine) hỗ trợ tự động Supabase hoặc SQLite
 if DATABASE_URL:
-    db_url = DATABASE_URL.replace("postgres://", "postgresql://")
+    db_url = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://").replace("postgresql://", "postgresql+psycopg2://")
     engine = create_engine(db_url, pool_size=10, max_overflow=20)
     logger.info("🟢 Đã kết nối với Supabase PostgreSQL (Cloud).")
 else:
